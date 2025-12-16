@@ -180,18 +180,23 @@ install_php() {
             exit 1
         }
         INSTALLED_REPOS+=("ppa:ondrej/php")
-        
-        log "Updating package lists..."
-        sudo apt-get update -y | tee -a "$LOG_FILE" || {
-            error "Failed to update after adding PHP repo"
-            exit 1
-        }
     else
-        log "PHP repository already added, updating package lists..."
-        sudo apt-get update -y | tee -a "$LOG_FILE" || {
-            error "Failed to update package lists"
-            exit 1
-        }
+        log "PHP repository already added"
+    fi
+    
+    # Always update package lists to ensure we have latest package information
+    log "Updating package lists..."
+    sudo apt-get update -y | tee -a "$LOG_FILE" || {
+        error "Failed to update package lists"
+        exit 1
+    }
+    
+    # Verify repository is working
+    log "Verifying PHP repository..."
+    if ! apt-cache search --names-only "^php[0-9]" &>/dev/null | grep -q "php"; then
+        warn "PHP repository might not be working correctly"
+        log "Repository sources:"
+        grep -r "ondrej/php" /etc/apt/sources.list.d/ 2>/dev/null || true
     fi
     
     # Check which PHP version is available
@@ -199,42 +204,72 @@ install_php() {
     
     log "Checking available PHP versions in repository..."
     
-    # Method 1: Try apt-cache search (most reliable)
-    AVAILABLE_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V -r | head -3)
+    # Get all available PHP versions
+    ALL_PHP_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V -r | uniq)
     
-    if [ -n "$AVAILABLE_VERSIONS" ]; then
+    log "Available PHP versions found: $ALL_PHP_VERSIONS"
+    
+    if [ -n "$ALL_PHP_VERSIONS" ]; then
         # Find the highest version >= 8.1
-        for version in $AVAILABLE_VERSIONS; do
+        for version in $ALL_PHP_VERSIONS; do
             MAJOR=$(echo "$version" | cut -d. -f1)
             MINOR=$(echo "$version" | cut -d. -f2)
             if [ "$MAJOR" -gt 8 ] || ([ "$MAJOR" -eq 8 ] && [ "$MINOR" -ge 1 ]); then
                 PHP_VERSION="$version"
-                log "Found PHP ${PHP_VERSION} in repository"
+                log "Selected PHP ${PHP_VERSION} (meets requirement >= 8.1)"
                 break
             fi
         done
     fi
     
-    # Method 2: Fallback to direct policy check if search didn't work
+    # Method 2: Try direct install test for each version
     if [ -z "$PHP_VERSION" ]; then
-        log "Trying alternative detection method..."
+        log "Trying direct package availability check..."
+        for version in "8.3" "8.2" "8.1"; do
+            if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
+                PHP_VERSION="$version"
+                log "Found PHP ${PHP_VERSION} using direct package check"
+                break
+            fi
+        done
+    fi
+    
+    # Method 3: Try policy check
+    if [ -z "$PHP_VERSION" ]; then
+        log "Trying policy check method..."
         for version in "8.3" "8.2" "8.1"; do
             POLICY_OUTPUT=$(apt-cache policy "php${version}-cli" 2>/dev/null)
             if echo "$POLICY_OUTPUT" | grep -q "Candidate:" && ! echo "$POLICY_OUTPUT" | grep -q "Candidate: (none)"; then
-                PHP_VERSION="$version"
-                log "Found PHP ${PHP_VERSION} using policy check"
-                break
+                CANDIDATE=$(echo "$POLICY_OUTPUT" | grep "Candidate:" | awk '{print $2}')
+                if [ "$CANDIDATE" != "(none)" ] && [ -n "$CANDIDATE" ]; then
+                    PHP_VERSION="$version"
+                    log "Found PHP ${PHP_VERSION} using policy check (candidate: $CANDIDATE)"
+                    break
+                fi
             fi
         done
     fi
     
-    # Final check
+    # Final check - if still no PHP 8.1+, check if we can install from source or provide guidance
     if [ -z "$PHP_VERSION" ]; then
         error "No suitable PHP version (8.1+) found in repository"
-        error "Available PHP packages:"
-        apt-cache search --names-only "^php[0-9]" 2>/dev/null | grep -E "^php[0-9]\.[0-9]-cli" | head -10 || true
-        error "Repository status:"
-        apt-cache policy php8.3-cli php8.2-cli php8.1-cli 2>/dev/null | head -20 || true
+        error ""
+        error "Available PHP packages in repository:"
+        apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || true
+        error ""
+        error "Repository information:"
+        grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || true
+        error ""
+        error "Troubleshooting steps:"
+        error "1. Check if repository is properly added: sudo add-apt-repository ppa:ondrej/php"
+        error "2. Update package lists: sudo apt-get update"
+        error "3. Check repository: apt-cache policy php8.1-cli php8.2-cli php8.3-cli"
+        error "4. For Ubuntu 20.04, PHP 8.1+ should be available from ondrej/php PPA"
+        error ""
+        error "If PHP 8.1+ is still not available, you may need to:"
+        error "- Check your internet connection"
+        error "- Verify repository keys are installed: sudo apt-key list | grep ondrej"
+        error "- Try removing and re-adding repository"
         exit 1
     fi
     
