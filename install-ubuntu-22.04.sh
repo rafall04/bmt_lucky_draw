@@ -449,7 +449,8 @@ install_php() {
     
     # Verify required extensions
     # Note: Extension names in php -m may differ from package names
-    # json and opcache are built-in for PHP 8.0+, no separate package needed
+    # json is built-in for PHP 8.0+, no separate package needed
+    # opcache is built-in but needs to be enabled in php.ini
     REQUIRED_EXTENSIONS=(
         "pdo_mysql"  # MySQL PDO driver (from php-mysql package)
         "zip"
@@ -460,8 +461,10 @@ install_php() {
         "bcmath"
         "intl"
         "json"      # Built-in for PHP 8.0+
-        "opcache"   # Built-in for PHP 8.0+
     )
+    
+    # Opcache is optional but recommended for production
+    OPCACHE_EXTENSION="opcache"
     MISSING_EXTENSIONS=()
     
     log "Verifying PHP extensions..."
@@ -543,15 +546,21 @@ install_php() {
         done
         
         if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
-            error "Still missing extensions after installation attempt: ${MISSING_EXTENSIONS[*]}"
+            error "Still missing critical extensions after installation attempt: ${MISSING_EXTENSIONS[*]}"
             error "Please check PHP configuration and installed packages"
             error "You may need to restart PHP-FPM: sudo systemctl restart php${PHP_VERSION}-fpm"
             exit 1
         else
-            log "✓ All extensions are now loaded"
+            log "✓ All required extensions are now loaded"
         fi
     else
         log "✓ All required PHP extensions are loaded"
+    fi
+    
+    # Final opcache check (optional, don't fail if not enabled)
+    if ! php -m | grep -qi "^opcache$"; then
+        warn "⚠ Opcache is not enabled (optional but recommended for production)"
+        warn "⚠ To enable opcache, restart PHP-FPM after installation completes"
     fi
     
     # Store PHP version for later use
