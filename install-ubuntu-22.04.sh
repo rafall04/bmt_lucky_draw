@@ -396,14 +396,38 @@ install_php() {
     fi
     
     # Install packages
+    # Note: Some packages like php8.5 are metapackages that automatically install dependencies
     for package in "${PHP_PACKAGES[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
             log "Installing $package..."
-            sudo apt-get install -y "$package" | tee -a "$LOG_FILE" || {
-                error "Failed to install $package"
-                exit 1
-            }
-            INSTALLED_PACKAGES+=("$package")
+            # Try to install, but don't fail immediately if package name doesn't exist
+            # Some packages might be metapackages or have different names
+            if sudo apt-get install -y "$package" 2>&1 | tee -a "$LOG_FILE"; then
+                INSTALLED_PACKAGES+=("$package")
+                log "✓ $package installed successfully"
+            else
+                INSTALL_EXIT_CODE=${PIPESTATUS[0]}
+                # Check if it's a critical package (cli, fpm, common)
+                if [[ "$package" =~ (cli|fpm|common)$ ]]; then
+                    error "Failed to install critical package: $package (exit code: $INSTALL_EXIT_CODE)"
+                    error "Trying to find alternative package name..."
+                    # Try to find similar package
+                    ALTERNATIVE=$(apt-cache search --names-only "^php${PHP_VERSION}" 2>/dev/null | grep -E "(cli|fpm|common)" | head -1 | awk '{print $1}')
+                    if [ -n "$ALTERNATIVE" ] && [ "$ALTERNATIVE" != "$package" ]; then
+                        warn "Found alternative: $ALTERNATIVE, trying to install..."
+                        sudo apt-get install -y "$ALTERNATIVE" 2>&1 | tee -a "$LOG_FILE" || {
+                            error "Failed to install alternative package: $ALTERNATIVE"
+                            exit 1
+                        }
+                    else
+                        error "No alternative found for critical package: $package"
+                        exit 1
+                    fi
+                else
+                    warn "Failed to install $package (non-critical, exit code: $INSTALL_EXIT_CODE), continuing..."
+                    # For non-critical packages, continue installation
+                fi
+            fi
         else
             log "✓ $package already installed"
         fi
