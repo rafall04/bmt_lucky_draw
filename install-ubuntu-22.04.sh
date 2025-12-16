@@ -491,11 +491,46 @@ install_php() {
         log "✓ Opcache is enabled"
     else
         # Try to enable opcache
-        PHP_INI_DIR=$(php --ini | grep "Scan for additional .ini files" | awk '{print $NF}')
+        # Get PHP ini directory - try multiple methods
+        PHP_INI_DIR=""
+        
+        # Method 1: From php --ini output
+        if php --ini 2>/dev/null | grep -q "Scan for additional .ini files"; then
+            PHP_INI_DIR=$(php --ini 2>/dev/null | grep "Scan for additional .ini files" | awk '{print $NF}')
+        fi
+        
+        # Method 2: Try common locations for PHP 8.x
+        if [ -z "$PHP_INI_DIR" ] || [ ! -d "$PHP_INI_DIR" ]; then
+            for dir in "/etc/php/${PHP_VERSION}/cli/conf.d" "/etc/php/${PHP_VERSION}/fpm/conf.d" "/etc/php/${PHP_VERSION}/mods-available"; do
+                if [ -d "$dir" ]; then
+                    PHP_INI_DIR="$dir"
+                    log "Found PHP ini directory: $PHP_INI_DIR"
+                    break
+                fi
+            done
+        fi
+        
+        # Method 3: Try to find from php.ini location
+        if [ -z "$PHP_INI_DIR" ] || [ ! -d "$PHP_INI_DIR" ]; then
+            PHP_MAIN_INI=$(php --ini 2>/dev/null | grep "Loaded Configuration File" | awk '{print $NF}' | xargs dirname 2>/dev/null)
+            if [ -n "$PHP_MAIN_INI" ] && [ -d "$PHP_MAIN_INI/conf.d" ]; then
+                PHP_INI_DIR="$PHP_MAIN_INI/conf.d"
+                log "Found PHP ini directory from main ini: $PHP_INI_DIR"
+            fi
+        fi
+        
+        # Method 4: Try FPM specific directory
+        if [ -z "$PHP_INI_DIR" ] || [ ! -d "$PHP_INI_DIR" ]; then
+            if [ -d "/etc/php/${PHP_VERSION}/fpm/conf.d" ]; then
+                PHP_INI_DIR="/etc/php/${PHP_VERSION}/fpm/conf.d"
+                log "Using FPM conf.d directory: $PHP_INI_DIR"
+            fi
+        fi
+        
         if [ -n "$PHP_INI_DIR" ] && [ -d "$PHP_INI_DIR" ]; then
             OPCACHE_INI="${PHP_INI_DIR}/10-opcache.ini"
             if [ ! -f "$OPCACHE_INI" ]; then
-                log "Enabling opcache..."
+                log "Enabling opcache in $OPCACHE_INI..."
                 sudo tee "$OPCACHE_INI" > /dev/null <<EOF
 ; Enable opcache for better performance
 zend_extension=opcache
@@ -507,13 +542,15 @@ opcache.max_accelerated_files=10000
 opcache.revalidate_freq=2
 opcache.fast_shutdown=1
 EOF
-                log "✓ Opcache configuration created"
+                log "✓ Opcache configuration created at $OPCACHE_INI"
                 warn "⚠ PHP-FPM needs to be restarted for opcache to take effect"
             else
-                log "✓ Opcache configuration file already exists"
+                log "✓ Opcache configuration file already exists at $OPCACHE_INI"
             fi
         else
-            warn "⚠ Could not find PHP ini directory, opcache may need manual configuration"
+            warn "⚠ Could not find PHP ini directory for opcache configuration"
+            warn "⚠ Opcache may need manual configuration in php.ini"
+            warn "⚠ Common locations: /etc/php/${PHP_VERSION}/fpm/php.ini or /etc/php/${PHP_VERSION}/cli/php.ini"
         fi
     fi
     
