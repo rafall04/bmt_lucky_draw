@@ -1572,6 +1572,11 @@ server {
     add_header X-Frame-Options "SAMEORIGIN";
     add_header X-Content-Type-Options "nosniff";
 
+    # Trust proxy headers (for Cloudflare Tunnel, load balancers, etc.)
+    real_ip_header X-Forwarded-For;
+    set_real_ip_from 0.0.0.0/0;
+    real_ip_recursive on;
+
     index index.php;
 
     charset utf-8;
@@ -1737,19 +1742,22 @@ with open('.env', 'w') as f:
         fi
         log "✓ Set SESSION_SECURE_COOKIE=true for HTTPS"
     elif [ -n "$SERVER_IP" ]; then
-        # If IP is provided, set to false to allow HTTP access via IP
-        if grep -q "^SESSION_SECURE_COOKIE=" .env; then
-            if command -v sed &>/dev/null; then
-                if [[ "$OSTYPE" == "darwin"* ]]; then
-                    sed -i '' "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
-                else
-                    sed -i "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
+        # If IP is provided and domain is HTTP, set to false to allow HTTP access via IP
+        # But if domain is HTTPS (Cloudflare), keep secure cookie true
+        if [ "$SESSION_SECURE" != "true" ]; then
+            if grep -q "^SESSION_SECURE_COOKIE=" .env; then
+                if command -v sed &>/dev/null; then
+                    if [[ "$OSTYPE" == "darwin"* ]]; then
+                        sed -i '' "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
+                    else
+                        sed -i "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
+                    fi
                 fi
+            else
+                echo "SESSION_SECURE_COOKIE=false" >> .env
             fi
-        else
-            echo "SESSION_SECURE_COOKIE=false" >> .env
+            log "✓ Set SESSION_SECURE_COOKIE=false to support IP access (HTTP)"
         fi
-        log "✓ Set SESSION_SECURE_COOKIE=false to support IP access (HTTP)"
     fi
     
     # Set SESSION_DOMAIN to empty to allow cookies for both domain and IP
