@@ -425,6 +425,37 @@ install_php() {
         INSTALLED_PHP_VERSION=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
         log "✓ PHP $INSTALLED_PHP_VERSION installed successfully"
         export PHP_VERSION_INSTALLED="$INSTALLED_PHP_VERSION"
+        
+        # CRITICAL: Start and enable PHP-FPM
+        log "Starting PHP-FPM ${PHP_VERSION}..."
+        if systemctl is-active --quiet "php${PHP_VERSION}-fpm"; then
+            log "✓ PHP-FPM ${PHP_VERSION} is already running"
+        else
+            $SUDO_CMD systemctl start "php${PHP_VERSION}-fpm" || {
+                error "Failed to start PHP-FPM ${PHP_VERSION}"
+                exit 1
+            }
+            log "✓ PHP-FPM ${PHP_VERSION} started"
+        fi
+        
+        # Enable PHP-FPM to start on boot
+        $SUDO_CMD systemctl enable "php${PHP_VERSION}-fpm" || {
+            warn "Failed to enable PHP-FPM ${PHP_VERSION} on boot"
+        }
+        
+        # Verify PHP-FPM socket exists
+        PHP_FPM_SOCKET="/var/run/php/php${PHP_VERSION}-fpm.sock"
+        if [ -S "$PHP_FPM_SOCKET" ]; then
+            log "✓ PHP-FPM socket found at $PHP_FPM_SOCKET"
+            # Fix socket permissions
+            $SUDO_CMD chown www-data:www-data "$PHP_FPM_SOCKET" 2>/dev/null || true
+            $SUDO_CMD chmod 666 "$PHP_FPM_SOCKET" 2>/dev/null || true
+        else
+            warn "PHP-FPM socket not found at $PHP_FPM_SOCKET"
+            warn "Socket may be created after PHP-FPM restart"
+            # Try restarting PHP-FPM to create socket
+            $SUDO_CMD systemctl restart "php${PHP_VERSION}-fpm" || true
+        fi
     else
         error "PHP command not found after installation"
         exit 1
