@@ -173,30 +173,50 @@ install_php() {
     fi
     
     # Check if PHP repository is already added
-    if ! grep -q "^deb.*ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
-        log "Adding PHP repository..."
+    REPO_ADDED=false
+    if grep -q "^deb.*ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+        log "PHP repository already added"
+        REPO_ADDED=true
+    else
+        log "Adding PHP repository (ondrej/php)..."
         sudo add-apt-repository ppa:ondrej/php -y | tee -a "$LOG_FILE" || {
             error "Failed to add PHP repository"
-            exit 1
+            error "Trying alternative method..."
+            # Alternative: Add repository manually
+            echo "deb http://ppa.launchpad.net/ondrej/php/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/ondrej-php.list
+            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C || true
+            INSTALLED_REPOS+=("ppa:ondrej/php")
         }
         INSTALLED_REPOS+=("ppa:ondrej/php")
-    else
-        log "PHP repository already added"
+        REPO_ADDED=true
     fi
     
     # Always update package lists to ensure we have latest package information
     log "Updating package lists..."
     sudo apt-get update -y | tee -a "$LOG_FILE" || {
         error "Failed to update package lists"
-        exit 1
+        warn "Trying to fix repository keys..."
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C || true
+        sudo apt-get update -y | tee -a "$LOG_FILE" || {
+            error "Still failed to update package lists"
+            exit 1
+        }
     }
     
-    # Verify repository is working
-    log "Verifying PHP repository..."
-    if ! apt-cache search --names-only "^php[0-9]" &>/dev/null | grep -q "php"; then
-        warn "PHP repository might not be working correctly"
-        log "Repository sources:"
-        grep -r "ondrej/php" /etc/apt/sources.list.d/ 2>/dev/null || true
+    # Verify repository is working and has PHP 8.1+ packages
+    log "Verifying PHP repository and checking for PHP 8.1+ packages..."
+    REPO_WORKING=false
+    
+    # Check if we can see PHP packages from ondrej repository
+    if apt-cache search --names-only "^php[0-9]" 2>/dev/null | grep -q "php"; then
+        REPO_WORKING=true
+        log "Repository is accessible"
+    else
+        warn "Repository might not be working correctly"
+        log "Checking repository sources:"
+        grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || true
+        log "Checking repository keys:"
+        sudo apt-key list 2>/dev/null | grep -i ondrej || true
     fi
     
     # Check which PHP version is available
