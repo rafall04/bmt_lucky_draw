@@ -250,7 +250,8 @@ install_php() {
     # Verify packages exist before installing
     MISSING_PACKAGES=()
     for package in "${PHP_PACKAGES[@]}"; do
-        if ! apt-cache show "$package" &>/dev/null; then
+        # Use apt-cache policy which is more reliable
+        if ! apt-cache policy "$package" 2>/dev/null | grep -q "Candidate:" || apt-cache policy "$package" 2>/dev/null | grep -q "Candidate: (none)"; then
             MISSING_PACKAGES+=("$package")
         fi
     done
@@ -258,6 +259,8 @@ install_php() {
     if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
         error "The following packages are not available: ${MISSING_PACKAGES[*]}"
         error "Please check repository configuration"
+        error "Trying to search for available PHP packages..."
+        apt-cache search --names-only "^php${PHP_VERSION}" 2>/dev/null | head -10 || true
         exit 1
     fi
     
