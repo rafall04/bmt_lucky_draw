@@ -531,9 +531,32 @@ install_php() {
             OPCACHE_INI="${PHP_INI_DIR}/10-opcache.ini"
             if [ ! -f "$OPCACHE_INI" ]; then
                 log "Enabling opcache in $OPCACHE_INI..."
-                sudo tee "$OPCACHE_INI" > /dev/null <<EOF
+                
+                # Find opcache.so location
+                OPCACHE_SO=""
+                for possible_path in "/usr/lib/php/${PHP_VERSION}/opcache.so" \
+                                    "/usr/lib/php/$(php -r 'echo PHP_VERSION;' | cut -d. -f1,2)/opcache.so" \
+                                    "/usr/lib/php/20250925/opcache.so" \
+                                    "/usr/lib/php/20220829/opcache.so"; do
+                    if [ -f "$possible_path" ]; then
+                        OPCACHE_SO="$possible_path"
+                        log "Found opcache.so at: $OPCACHE_SO"
+                        break
+                    fi
+                done
+                
+                # If opcache.so not found, try to find it
+                if [ -z "$OPCACHE_SO" ]; then
+                    OPCACHE_SO=$(find /usr/lib/php -name "opcache.so" 2>/dev/null | head -1)
+                    if [ -n "$OPCACHE_SO" ]; then
+                        log "Found opcache.so at: $OPCACHE_SO"
+                    fi
+                fi
+                
+                if [ -n "$OPCACHE_SO" ] && [ -f "$OPCACHE_SO" ]; then
+                    sudo tee "$OPCACHE_INI" > /dev/null <<EOF
 ; Enable opcache for better performance
-zend_extension=opcache
+zend_extension=$OPCACHE_SO
 opcache.enable=1
 opcache.enable_cli=0
 opcache.memory_consumption=128
@@ -542,7 +565,24 @@ opcache.max_accelerated_files=10000
 opcache.revalidate_freq=2
 opcache.fast_shutdown=1
 EOF
-                log "✓ Opcache configuration created at $OPCACHE_INI"
+                    log "✓ Opcache configuration created at $OPCACHE_INI"
+                else
+                    # Try without full path - let PHP find it
+                    log "Opcache.so not found, trying with extension name only..."
+                    sudo tee "$OPCACHE_INI" > /dev/null <<EOF
+; Enable opcache for better performance
+; Note: Opcache is built-in for PHP 8.0+, may not need zend_extension
+opcache.enable=1
+opcache.enable_cli=0
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=10000
+opcache.revalidate_freq=2
+opcache.fast_shutdown=1
+EOF
+                    log "✓ Opcache configuration created (without zend_extension)"
+                    warn "⚠ If opcache still doesn't work, check php.ini for opcache settings"
+                fi
                 warn "⚠ PHP-FPM needs to be restarted for opcache to take effect"
             else
                 log "✓ Opcache configuration file already exists at $OPCACHE_INI"
