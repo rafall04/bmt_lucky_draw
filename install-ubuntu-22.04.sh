@@ -1164,13 +1164,28 @@ setup_permissions() {
     sudo find "$PROJECT_DIR" -type f -exec chmod 644 {} \; || true
     
     log "Setting storage permissions..."
+    # Ensure directories exist
+    mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache 2>/dev/null || true
+    
+    # Set permissions
     sudo chmod -R 775 storage bootstrap/cache || {
         error "Failed to set storage permissions"
         exit 1
     }
     
+    # Set ownership to www-data
+    sudo chown -R www-data:www-data bootstrap/cache storage 2>/dev/null || {
+        warn "Failed to set ownership to www-data, continuing..."
+    }
+    
     log "Creating storage link..."
     php artisan storage:link 2>&1 | tee -a "$LOG_FILE" || true
+    
+    # Clear and rebuild caches to ensure everything works
+    log "Clearing application caches..."
+    php artisan config:clear 2>&1 | tee -a "$LOG_FILE" || true
+    php artisan cache:clear 2>&1 | tee -a "$LOG_FILE" || true
+    php artisan view:clear 2>&1 | tee -a "$LOG_FILE" || true
     
     log "✓ Permissions configured"
 }
