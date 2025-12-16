@@ -448,21 +448,111 @@ install_php() {
     fi
     
     # Verify required extensions
-    REQUIRED_EXTENSIONS=("mysql" "zip" "gd" "mbstring" "curl" "xml" "bcmath" "intl")
+    # Note: Extension names in php -m may differ from package names
+    # json and opcache are built-in for PHP 8.0+, no separate package needed
+    REQUIRED_EXTENSIONS=(
+        "pdo_mysql"  # MySQL PDO driver (from php-mysql package)
+        "zip"
+        "gd"
+        "mbstring"
+        "curl"
+        "xml"
+        "bcmath"
+        "intl"
+        "json"      # Built-in for PHP 8.0+
+        "opcache"   # Built-in for PHP 8.0+
+    )
     MISSING_EXTENSIONS=()
     
+    log "Verifying PHP extensions..."
     for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-        if ! php -m | grep -qi "^$ext$"; then
+        # Check if extension is loaded
+        if php -m | grep -qi "^${ext}$"; then
+            log "✓ Extension $ext is loaded"
+        else
+            # For mysql, also check pdo_mysql and mysqli
+            if [ "$ext" = "pdo_mysql" ]; then
+                if php -m | grep -qiE "^(pdo_mysql|mysqli|mysql)$"; then
+                    log "✓ MySQL extension found (pdo_mysql, mysqli, or mysql)"
+                    continue
+                fi
+            fi
             MISSING_EXTENSIONS+=("$ext")
+            warn "✗ Extension $ext is not loaded"
         fi
     done
     
     if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
         error "Missing PHP extensions: ${MISSING_EXTENSIONS[*]}"
-        exit 1
+        error "Loaded extensions:"
+        php -m | grep -E "^[a-z]" | head -20 || true
+        error ""
+        error "Trying to install missing extensions..."
+        
+        # Try to install missing extensions
+        for ext in "${MISSING_EXTENSIONS[@]}"; do
+            # Map extension names to package names
+            case "$ext" in
+                "pdo_mysql"|"mysql")
+                    PACKAGE_NAME="php${PHP_VERSION}-mysql"
+                    ;;
+                "zip")
+                    PACKAGE_NAME="php${PHP_VERSION}-zip"
+                    ;;
+                "gd")
+                    PACKAGE_NAME="php${PHP_VERSION}-gd"
+                    ;;
+                "mbstring")
+                    PACKAGE_NAME="php${PHP_VERSION}-mbstring"
+                    ;;
+                "curl")
+                    PACKAGE_NAME="php${PHP_VERSION}-curl"
+                    ;;
+                "xml")
+                    PACKAGE_NAME="php${PHP_VERSION}-xml"
+                    ;;
+                "bcmath")
+                    PACKAGE_NAME="php${PHP_VERSION}-bcmath"
+                    ;;
+                "intl")
+                    PACKAGE_NAME="php${PHP_VERSION}-intl"
+                    ;;
+                *)
+                    warn "Extension $ext is built-in or unknown, skipping package installation..."
+                    continue
+                    ;;
+            esac
+            
+            log "Installing $PACKAGE_NAME for extension $ext..."
+            sudo apt-get install -y "$PACKAGE_NAME" 2>&1 | tee -a "$LOG_FILE" || {
+                warn "Failed to install $PACKAGE_NAME"
+            }
+        done
+        
+        # Re-check extensions after installation attempt
+        log "Re-checking extensions after installation..."
+        MISSING_EXTENSIONS=()
+        for ext in "${REQUIRED_EXTENSIONS[@]}"; do
+            if [ "$ext" = "pdo_mysql" ]; then
+                if ! php -m | grep -qiE "^(pdo_mysql|mysqli|mysql)$"; then
+                    MISSING_EXTENSIONS+=("$ext")
+                fi
+            elif ! php -m | grep -qi "^${ext}$"; then
+                MISSING_EXTENSIONS+=("$ext")
+            fi
+        done
+        
+        if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
+            error "Still missing extensions after installation attempt: ${MISSING_EXTENSIONS[*]}"
+            error "Please check PHP configuration and installed packages"
+            error "You may need to restart PHP-FPM: sudo systemctl restart php${PHP_VERSION}-fpm"
+            exit 1
+        else
+            log "✓ All extensions are now loaded"
+        fi
+    else
+        log "✓ All required PHP extensions are loaded"
     fi
-    
-    log "✓ All required PHP extensions installed"
     
     # Store PHP version for later use
     export PHP_VERSION_INSTALLED="$PHP_VERSION"
