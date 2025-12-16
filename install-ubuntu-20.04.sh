@@ -196,18 +196,33 @@ install_php() {
     
     # Check which PHP version is available
     PHP_VERSION=""
-    if apt-cache show php8.3-cli &>/dev/null; then
+    
+    # Use apt-cache policy which is more reliable than apt-cache show
+    log "Checking available PHP versions in repository..."
+    
+    if apt-cache policy php8.3-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.3-cli 2>/dev/null | grep -q "Candidate: (none)"; then
         PHP_VERSION="8.3"
         log "PHP 8.3 is available in repository"
-    elif apt-cache show php8.2-cli &>/dev/null; then
+    elif apt-cache policy php8.2-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.2-cli 2>/dev/null | grep -q "Candidate: (none)"; then
         PHP_VERSION="8.2"
         warn "PHP 8.3 not available, using PHP 8.2 instead"
-    elif apt-cache show php8.1-cli &>/dev/null; then
+    elif apt-cache policy php8.1-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.1-cli 2>/dev/null | grep -q "Candidate: (none)"; then
         PHP_VERSION="8.1"
         warn "PHP 8.3 not available, using PHP 8.1 instead"
     else
-        error "No suitable PHP version (8.1+) found in repository"
-        exit 1
+        # Try alternative method: search for available PHP packages
+        log "Trying alternative method to detect PHP versions..."
+        AVAILABLE_PHP=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V | tail -1)
+        
+        if [ -n "$AVAILABLE_PHP" ]; then
+            PHP_VERSION="$AVAILABLE_PHP"
+            log "Found PHP ${PHP_VERSION} using alternative detection method"
+        else
+            error "No suitable PHP version (8.1+) found in repository"
+            error "Available PHP packages:"
+            apt-cache search --names-only "^php[0-9]" 2>/dev/null | grep -E "^php[0-9]\.[0-9]-cli" | head -5 || true
+            exit 1
+        fi
     fi
     
     # Install PHP and extensions based on available version
