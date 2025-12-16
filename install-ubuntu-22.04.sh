@@ -1009,6 +1009,12 @@ install_dependencies() {
             fi
         fi
         
+        # Set COMPOSER_ALLOW_SUPERUSER if running as root
+        if [ "$IS_ROOT" = true ]; then
+            export COMPOSER_ALLOW_SUPERUSER=1
+            log "Running as root - enabling COMPOSER_ALLOW_SUPERUSER"
+        fi
+        
         # Install dependencies - use current user, not www-data (permissions will be fixed later)
         log "Running composer install..."
         
@@ -1026,7 +1032,16 @@ install_dependencies() {
             
             # Check if it's a lock file compatibility issue (multiple patterns)
             COMPATIBILITY_ISSUE=false
-            if echo "$COMPOSER_ERROR_TEXT" | grep -qi "does not satisfy that requirement"; then
+            LOCK_FILE_MISMATCH=false
+            
+            # Check for lock file mismatch with composer.json
+            if echo "$COMPOSER_ERROR_TEXT" | grep -qi "is in the lock file as.*but that does not satisfy your constraint"; then
+                LOCK_FILE_MISMATCH=true
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "The lock file is not up to date"; then
+                LOCK_FILE_MISMATCH=true
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "does not satisfy that requirement"; then
                 COMPATIBILITY_ISSUE=true
             elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "Your lock file does not contain a compatible set"; then
                 COMPATIBILITY_ISSUE=true
@@ -1038,7 +1053,29 @@ install_dependencies() {
                 COMPATIBILITY_ISSUE=true
             fi
             
-            if [ "$COMPATIBILITY_ISSUE" = true ]; then
+            if [ "$LOCK_FILE_MISMATCH" = true ]; then
+                warn "Lock file mismatch detected - composer.json and composer.lock are out of sync"
+                log "Updating composer.lock to match composer.json..."
+                
+                # Lock file doesn't match composer.json - need to update
+                if ! composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                    warn "Composer update failed, trying with --ignore-platform-reqs..."
+                    if ! composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                        error "Failed to update lock file"
+                        error "Please run manually: composer update --no-dev"
+                        rm -f "$COMPOSER_OUTPUT"
+                        exit 1
+                    fi
+                fi
+                
+                # Now try install again
+                log "Installing updated dependencies..."
+                if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+                    error "Failed to install after lock file update"
+                    rm -f "$COMPOSER_OUTPUT"
+                    exit 1
+                fi
+            elif [ "$COMPATIBILITY_ISSUE" = true ]; then
                 warn "Lock file compatibility issue detected with PHP 8.5"
                 log "Updating composer dependencies to resolve compatibility..."
                 
