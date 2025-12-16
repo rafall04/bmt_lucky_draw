@@ -1064,7 +1064,13 @@ install_dependencies() {
                     warn "You may need to run 'php artisan package:discover' manually later"
                 }
             fi
-        }
+            
+            # Clean up temp file
+            rm -f "$COMPOSER_OUTPUT"
+        else
+            # Success - clean up temp file
+            rm -f "$COMPOSER_OUTPUT"
+        fi
         log "✓ PHP dependencies installed"
     else
         error "composer.json not found!"
