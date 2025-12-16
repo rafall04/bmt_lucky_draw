@@ -109,7 +109,7 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function () {
         ->name('backups.restore');
     Route::post('/backups/{backup}/restore', [\App\Http\Controllers\BackupController::class, 'restore'])
         ->middleware('role:admin')
-        ->name('backups.restore');
+        ->name('backups.restore.store');
     Route::delete('/backups/{backup}', [\App\Http\Controllers\BackupController::class, 'destroy'])
         ->middleware('role:admin')
         ->name('backups.destroy');
