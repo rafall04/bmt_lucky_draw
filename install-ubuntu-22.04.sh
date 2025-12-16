@@ -985,31 +985,52 @@ install_dependencies() {
         
         # Install dependencies - use current user, not www-data (permissions will be fixed later)
         log "Running composer install..."
-        composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
+        
+        # Capture output to check for compatibility issues
+        COMPOSER_OUTPUT=$(mktemp)
+        if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE"; then
             error "Failed to install PHP dependencies"
             log "Checking for compatibility issues..."
             
-            # Check if it's a lock file compatibility issue
-            if grep -q "does not satisfy that requirement" "$LOG_FILE" 2>/dev/null || \
+            # Check if it's a lock file compatibility issue (check both temp file and log)
+            COMPATIBILITY_ISSUE=false
+            if grep -q "does not satisfy that requirement" "$COMPOSER_OUTPUT" 2>/dev/null || \
+               grep -q "Your lock file does not contain a compatible set" "$COMPOSER_OUTPUT" 2>/dev/null || \
+               grep -q "phpspreadsheet.*requires php.*<8.5" "$COMPOSER_OUTPUT" 2>/dev/null || \
+               grep -q "does not satisfy that requirement" "$LOG_FILE" 2>/dev/null || \
                grep -q "Your lock file does not contain a compatible set" "$LOG_FILE" 2>/dev/null; then
-                warn "Lock file compatibility issue detected"
+                COMPATIBILITY_ISSUE=true
+            fi
+            
+            if [ "$COMPATIBILITY_ISSUE" = true ]; then
+                warn "Lock file compatibility issue detected with PHP 8.5"
                 log "Updating composer dependencies to resolve compatibility..."
                 
+                # For PHP 8.5, we need to update packages to compatible versions
+                # First, try to update specific packages that are known to have issues
+                log "Updating maatwebsite/excel and phpspreadsheet to PHP 8.5 compatible versions..."
+                
                 # Update composer dependencies to fix lock file
-                composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE" || {
-                    warn "Composer update failed, trying with --ignore-platform-reqs..."
-                    composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE" || {
-                        error "Failed to update dependencies"
-                        exit 1
-                    }
-                }
+                # Use --with-all-dependencies to ensure all related packages are updated
+                if ! composer update maatwebsite/excel phpoffice/phpspreadsheet --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                    warn "Specific package update failed, trying full update..."
+                    if ! composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                        warn "Composer update failed, trying with --ignore-platform-reqs..."
+                        if ! composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                            error "Failed to update dependencies"
+                            rm -f "$COMPOSER_OUTPUT"
+                            exit 1
+                        fi
+                    fi
+                fi
                 
                 # Now try install again
                 log "Installing updated dependencies..."
-                composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
+                if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
                     error "Failed to install after update"
+                    rm -f "$COMPOSER_OUTPUT"
                     exit 1
-                }
+                fi
             else
                 # Other error - try with --ignore-platform-reqs
                 log "Checking for cache path issues..."
