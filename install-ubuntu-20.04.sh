@@ -745,9 +745,22 @@ configure_nginx() {
     read -p "Domain name (or IP): " DOMAIN
     DOMAIN=${DOMAIN:-localhost}
     
+    # Detect PHP version if not set
+    if [ -z "${PHP_VERSION_INSTALLED:-}" ]; then
+        if command -v php &>/dev/null; then
+            PHP_VERSION_INSTALLED=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
+        else
+            # Try to detect from installed packages
+            PHP_VERSION_INSTALLED=$(dpkg -l | grep -oP 'php\K[0-9]+\.[0-9]+' | head -n 1 | cut -c 1-3)
+            if [ -z "$PHP_VERSION_INSTALLED" ]; then
+                PHP_VERSION_INSTALLED="8.3"  # Default fallback
+            fi
+        fi
+    fi
+    
     NGINX_CONFIG="/etc/nginx/sites-available/bmt_lucky_draw"
     
-    log "Creating Nginx configuration..."
+    log "Creating Nginx configuration for PHP ${PHP_VERSION_INSTALLED}..."
     sudo tee "$NGINX_CONFIG" > /dev/null <<EOF
 server {
     listen 80;
@@ -771,7 +784,7 @@ server {
     error_page 404 /index.php;
 
     location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php${PHP_VERSION_INSTALLED}-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
         include fastcgi_params;
     }
