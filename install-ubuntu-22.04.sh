@@ -245,45 +245,22 @@ install_php() {
         sudo apt-key list 2>/dev/null | grep -i ondrej || true
     fi
     
-    # Check which PHP version is available
-    PHP_VERSION=""
+    # FORCE PHP 8.3 - Do not auto-detect to avoid unstable versions like 8.5
+    PHP_VERSION="8.3"
     
-    log "Checking available PHP versions in repository..."
+    log "Forcing PHP ${PHP_VERSION} installation (stable version for Laravel 11)"
     
-    # Get all available PHP versions
-    # Use apt-cache search to find all PHP CLI packages
-    ALL_PHP_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V -r | uniq)
-    
-    if [ -z "$ALL_PHP_VERSIONS" ]; then
-        # Alternative: search for php metapackages
-        ALL_PHP_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]$" 2>/dev/null | grep -oP "^php\K[0-9]\.[0-9]" | sort -V -r | uniq)
-    fi
-    
-    log "Available PHP versions found: $ALL_PHP_VERSIONS"
-    
-    if [ -n "$ALL_PHP_VERSIONS" ]; then
-        # Find the highest version >= 8.2 (Laravel 11 requires PHP 8.2+)
-        for version in $ALL_PHP_VERSIONS; do
-            MAJOR=$(echo "$version" | cut -d. -f1)
-            MINOR=$(echo "$version" | cut -d. -f2)
-            if [ "$MAJOR" -gt 8 ] || ([ "$MAJOR" -eq 8 ] && [ "$MINOR" -ge 2 ]); then
-                PHP_VERSION="$version"
-                log "Selected PHP ${PHP_VERSION} (meets requirement >= 8.2)"
-                break
-            fi
-        done
-    fi
-    
-    # Method 2: Try direct install test for each version (prioritize 8.2+)
-    if [ -z "$PHP_VERSION" ]; then
-        log "Trying direct package availability check..."
-        for version in "8.3" "8.2"; do
-            if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
-                PHP_VERSION="$version"
-                log "Found PHP ${PHP_VERSION} using direct package check"
-                break
-            fi
-        done
+    # Check if PHP 8.3 is already installed
+    if check_command php; then
+        INSTALLED_VERSION=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
+        if [ "$INSTALLED_VERSION" = "8.3" ]; then
+            log "✓ PHP $INSTALLED_VERSION already installed"
+            export PHP_VERSION_INSTALLED="$INSTALLED_VERSION"
+            # Still verify extensions are installed below
+        else
+            warn "PHP $INSTALLED_VERSION installed but we need PHP 8.3"
+            log "Will install PHP 8.3 (may require removing existing PHP)"
+        fi
     fi
     
     # Method 3: Try policy check (prioritize 8.2+)
@@ -1356,41 +1333,97 @@ setup_permissions() {
     
     cd "$PROJECT_DIR" || exit 1
     
-    log "Setting ownership to www-data..."
-    sudo chown -R www-data:www-data "$PROJECT_DIR" || {
-        error "Failed to set ownership"
-        exit 1
-    }
+    # Use SUDO_CMD variable (empty if root, "sudo" if non-root)
+    SUDO_CMD="${SUDO_CMD:-sudo}"
     
-    log "Setting directory permissions..."
-    sudo find "$PROJECT_DIR" -type d -exec chmod 755 {} \; || true
+    # Determine web server user
+    WEB_USER="www-data"
+    if [ "$IS_ROOT" = true ]; then
+        # If root, we can set ownership more flexibly
+        # Check if www-data exists, if not use current user or root
+        if ! id -u "$WEB_USER" &>/dev/null; then
+            warn "www-data user not found, using root for ownership"
+            WEB_USER="root"
+        fi
+    fi
     
-    log "Setting file permissions..."
-    sudo find "$PROJECT_DIR" -type f -exec chmod 644 {} \; || true
+    # STEP 1: Set generic permissions FIRST (before artisan commands)
+    # This allows artisan commands to run without permission issues
+    log "Setting initial permissions for storage and cache directories..."
     
-    log "Setting storage permissions..."
     # Ensure directories exist
     mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs bootstrap/cache 2>/dev/null || true
     
-    # Set permissions
-    sudo chmod -R 775 storage bootstrap/cache || {
+    # Set permissions - more permissive for storage (775 = rwxrwxr-x)
+    $SUDO_CMD chmod -R 775 storage bootstrap/cache 2>/dev/null || {
         error "Failed to set storage permissions"
         exit 1
     }
     
-    # Set ownership to www-data
-    sudo chown -R www-data:www-data bootstrap/cache storage 2>/dev/null || {
-        warn "Failed to set ownership to www-data, continuing..."
+    # Set ownership temporarily to current user (or root) so artisan can write
+    CURRENT_USER=${SUDO_USER:-$USER}
+    if [ "$IS_ROOT" = true ]; then
+        CURRENT_USER="root"
+    fi
+    
+    log "Setting temporary ownership to $CURRENT_USER for artisan commands..."
+    $SUDO_CMD chown -R "$CURRENT_USER:$CURRENT_USER" storage bootstrap/cache 2>/dev/null || {
+        warn "Failed to set temporary ownership, continuing..."
     }
     
+    # STEP 2: Run artisan commands NOW (while we have write permissions)
+    log "Running artisan commands with proper permissions..."
+    
+    # Create storage link - remove existing symlink first if it exists
+    if [ -L "public/storage" ] || [ -e "public/storage" ]; then
+        log "Removing existing storage symlink..."
+        rm -f public/storage 2>/dev/null || $SUDO_CMD rm -f public/storage 2>/dev/null || true
+    fi
+    
     log "Creating storage link..."
-    php artisan storage:link 2>&1 | tee -a "$LOG_FILE" || true
+    php artisan storage:link 2>&1 | tee -a "$LOG_FILE" || {
+        warn "Storage link creation failed, will retry after ownership change"
+    }
     
     # Clear and rebuild caches to ensure everything works
     log "Clearing application caches..."
     php artisan config:clear 2>&1 | tee -a "$LOG_FILE" || true
     php artisan cache:clear 2>&1 | tee -a "$LOG_FILE" || true
     php artisan view:clear 2>&1 | tee -a "$LOG_FILE" || true
+    
+    # STEP 3: NOW set final ownership to www-data (AFTER all artisan commands)
+    log "Setting final ownership to $WEB_USER (after artisan commands)..."
+    $SUDO_CMD chown -R "$WEB_USER:$WEB_USER" "$PROJECT_DIR" || {
+        error "Failed to set ownership"
+        exit 1
+    }
+    
+    log "Setting directory permissions..."
+    $SUDO_CMD find "$PROJECT_DIR" -type d -exec chmod 755 {} \; || true
+    
+    log "Setting file permissions..."
+    $SUDO_CMD find "$PROJECT_DIR" -type f -exec chmod 644 {} \; || true
+    
+    # Ensure storage and cache remain writable
+    log "Ensuring storage and cache remain writable..."
+    $SUDO_CMD chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+    $SUDO_CMD chown -R "$WEB_USER:$WEB_USER" bootstrap/cache storage 2>/dev/null || {
+        warn "Failed to set ownership to $WEB_USER, continuing..."
+    }
+    
+    # If running as root and www-data exists, add group write permissions
+    if [ "$IS_ROOT" = true ] && [ "$WEB_USER" != "root" ] && id -u "$WEB_USER" &>/dev/null; then
+        # Add www-data group write permission
+        $SUDO_CMD chmod -R g+w storage bootstrap/cache 2>/dev/null || true
+    fi
+    
+    # Retry storage link if it failed earlier
+    if [ ! -L "public/storage" ]; then
+        log "Retrying storage link creation with $WEB_USER user..."
+        $SUDO_CMD -u "$WEB_USER" php artisan storage:link 2>&1 | tee -a "$LOG_FILE" || {
+            warn "Storage link creation failed, you may need to run manually: php artisan storage:link"
+        }
+    fi
     
     log "✓ Permissions configured"
 }
