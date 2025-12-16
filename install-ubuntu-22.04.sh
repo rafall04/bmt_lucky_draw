@@ -881,6 +881,13 @@ install_apache() {
     }
     INSTALLED_PACKAGES+=("apache2")
     
+    # Stop Nginx if running to avoid port conflicts
+    if systemctl is-active --quiet nginx; then
+        log "Nginx is running, stopping to avoid port conflicts..."
+        sudo systemctl stop nginx || true
+        sudo systemctl disable nginx || true
+    fi
+    
     sudo a2enmod rewrite headers ssl || true
     sudo systemctl start apache2 || true
     sudo systemctl enable apache2 || true
@@ -1601,6 +1608,86 @@ EOF
     
     # Update .env with correct APP_URL and HTTPS settings
     update_production_env "$DOMAIN" "$USE_HTTPS"
+}
+
+update_production_env() {
+    local DOMAIN=$1
+    local USE_HTTPS=$2
+    
+    if [ -z "$DOMAIN" ]; then
+        return 0
+    fi
+    
+    cd "$PROJECT_DIR" || exit 1
+    
+    log "Updating .env for production configuration..."
+    
+    # Determine APP_URL based on HTTPS
+    if [ "$USE_HTTPS" = "y" ] || [ "$USE_HTTPS" = "Y" ]; then
+        APP_URL="https://${DOMAIN}"
+        SESSION_SECURE="true"
+        log "✓ Configured for HTTPS: $APP_URL"
+    else
+        APP_URL="http://${DOMAIN}"
+        SESSION_SECURE="false"
+        log "✓ Configured for HTTP: $APP_URL"
+    fi
+    
+    # Update APP_URL in .env
+    if grep -q "^APP_URL=" .env; then
+        # Use sed to update APP_URL
+        if command -v sed &>/dev/null; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS sed
+                sed -i '' "s|^APP_URL=.*|APP_URL=${APP_URL}|" .env
+            else
+                # Linux sed
+                sed -i "s|^APP_URL=.*|APP_URL=${APP_URL}|" .env
+            fi
+        else
+            # Fallback: use perl or python
+            if command -v perl &>/dev/null; then
+                perl -i -pe "s|^APP_URL=.*|APP_URL=${APP_URL}|" .env
+            elif command -v python3 &>/dev/null; then
+                python3 -c "
+import re
+with open('.env', 'r') as f:
+    content = f.read()
+content = re.sub(r'^APP_URL=.*', f'APP_URL={APP_URL}', content, flags=re.MULTILINE)
+with open('.env', 'w') as f:
+    f.write(content)
+"
+            fi
+        fi
+        log "✓ Updated APP_URL to $APP_URL"
+    else
+        # Add APP_URL if not exists
+        echo "APP_URL=${APP_URL}" >> .env
+        log "✓ Added APP_URL to .env"
+    fi
+    
+    # Update SESSION_SECURE_COOKIE for HTTPS
+    if [ "$SESSION_SECURE" = "true" ]; then
+        if grep -q "^SESSION_SECURE_COOKIE=" .env; then
+            if command -v sed &>/dev/null; then
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=true|" .env
+                else
+                    sed -i "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=true|" .env
+                fi
+            fi
+        else
+            echo "SESSION_SECURE_COOKIE=true" >> .env
+        fi
+        log "✓ Set SESSION_SECURE_COOKIE=true for HTTPS"
+    fi
+    
+    # Clear config cache to apply changes
+    log "Clearing configuration cache..."
+    php artisan config:clear 2>&1 | tee -a "$LOG_FILE" || true
+    php artisan cache:clear 2>&1 | tee -a "$LOG_FILE" || true
+    
+    log "✓ Production environment updated"
 }
 
 configure_apache() {
