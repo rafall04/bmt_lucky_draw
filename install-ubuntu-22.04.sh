@@ -230,13 +230,13 @@ install_php() {
     log "Available PHP versions found: $ALL_PHP_VERSIONS"
     
     if [ -n "$ALL_PHP_VERSIONS" ]; then
-        # Find the highest version >= 8.1
+        # Find the highest version >= 8.2 (Laravel 11 requires PHP 8.2+)
         for version in $ALL_PHP_VERSIONS; do
             MAJOR=$(echo "$version" | cut -d. -f1)
             MINOR=$(echo "$version" | cut -d. -f2)
-            if [ "$MAJOR" -gt 8 ] || ([ "$MAJOR" -eq 8 ] && [ "$MINOR" -ge 1 ]); then
+            if [ "$MAJOR" -gt 8 ] || ([ "$MAJOR" -eq 8 ] && [ "$MINOR" -ge 2 ]); then
                 PHP_VERSION="$version"
-                log "Selected PHP ${PHP_VERSION} (meets requirement >= 8.1)"
+                log "Selected PHP ${PHP_VERSION} (meets requirement >= 8.2)"
                 break
             fi
         done
