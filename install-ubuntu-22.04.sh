@@ -988,17 +988,27 @@ install_dependencies() {
         
         # Capture output to check for compatibility issues
         COMPOSER_OUTPUT=$(mktemp)
-        if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE"; then
+        COMPOSER_EXIT_CODE=0
+        composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE" || COMPOSER_EXIT_CODE=$?
+        
+        if [ $COMPOSER_EXIT_CODE -ne 0 ]; then
             error "Failed to install PHP dependencies"
             log "Checking for compatibility issues..."
             
-            # Check if it's a lock file compatibility issue (check both temp file and log)
+            # Read the output to check for compatibility issues
+            COMPOSER_ERROR_TEXT=$(cat "$COMPOSER_OUTPUT" 2>/dev/null || echo "")
+            
+            # Check if it's a lock file compatibility issue (multiple patterns)
             COMPATIBILITY_ISSUE=false
-            if grep -q "does not satisfy that requirement" "$COMPOSER_OUTPUT" 2>/dev/null || \
-               grep -q "Your lock file does not contain a compatible set" "$COMPOSER_OUTPUT" 2>/dev/null || \
-               grep -q "phpspreadsheet.*requires php.*<8.5" "$COMPOSER_OUTPUT" 2>/dev/null || \
-               grep -q "does not satisfy that requirement" "$LOG_FILE" 2>/dev/null || \
-               grep -q "Your lock file does not contain a compatible set" "$LOG_FILE" 2>/dev/null; then
+            if echo "$COMPOSER_ERROR_TEXT" | grep -qi "does not satisfy that requirement"; then
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "Your lock file does not contain a compatible set"; then
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "phpspreadsheet.*requires php.*<8.5"; then
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "requires php >=7.4.0 <8.5.0"; then
+                COMPATIBILITY_ISSUE=true
+            elif echo "$COMPOSER_ERROR_TEXT" | grep -qi "php version (8.5.0) does not satisfy"; then
                 COMPATIBILITY_ISSUE=true
             fi
             
