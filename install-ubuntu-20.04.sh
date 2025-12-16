@@ -270,26 +270,56 @@ install_php() {
         done
     fi
     
-    # Final check - if still no PHP 8.1+, check if we can install from source or provide guidance
+    # Final check - if still no PHP 8.1+, try to fix repository and retry
+    if [ -z "$PHP_VERSION" ]; then
+        warn "PHP 8.1+ not found, attempting to fix repository..."
+        
+        # Try to refresh repository keys
+        log "Refreshing repository keys..."
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C 2>&1 | tee -a "$LOG_FILE" || true
+        
+        # Remove and re-add repository
+        log "Re-adding PHP repository..."
+        sudo rm -f /etc/apt/sources.list.d/ondrej-php*.list 2>/dev/null || true
+        sudo add-apt-repository ppa:ondrej/php -y 2>&1 | tee -a "$LOG_FILE" || true
+        
+        # Update again
+        log "Updating package lists after repository fix..."
+        sudo apt-get update -y 2>&1 | tee -a "$LOG_FILE" || true
+        
+        # Retry detection
+        log "Retrying PHP version detection..."
+        for version in "8.3" "8.2" "8.1"; do
+            if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
+                PHP_VERSION="$version"
+                log "Found PHP ${PHP_VERSION} after repository fix"
+                break
+            fi
+        done
+    fi
+    
+    # Final check - if still no PHP 8.1+, show detailed error
     if [ -z "$PHP_VERSION" ]; then
         error "No suitable PHP version (8.1+) found in repository"
         error ""
         error "Available PHP packages in repository:"
-        apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || true
+        apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || echo "No PHP packages found"
         error ""
         error "Repository information:"
-        grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || true
+        grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || echo "No ondrej repository found"
         error ""
-        error "Troubleshooting steps:"
-        error "1. Check if repository is properly added: sudo add-apt-repository ppa:ondrej/php"
-        error "2. Update package lists: sudo apt-get update"
-        error "3. Check repository: apt-cache policy php8.1-cli php8.2-cli php8.3-cli"
-        error "4. For Ubuntu 20.04, PHP 8.1+ should be available from ondrej/php PPA"
+        error "Repository keys:"
+        sudo apt-key list 2>/dev/null | grep -i ondrej || echo "No ondrej keys found"
         error ""
-        error "If PHP 8.1+ is still not available, you may need to:"
-        error "- Check your internet connection"
-        error "- Verify repository keys are installed: sudo apt-key list | grep ondrej"
-        error "- Try removing and re-adding repository"
+        error "Manual troubleshooting steps:"
+        error "1. Remove existing repository: sudo rm /etc/apt/sources.list.d/ondrej-php*.list"
+        error "2. Add repository: sudo add-apt-repository ppa:ondrej/php"
+        error "3. Update: sudo apt-get update"
+        error "4. Check: apt-cache policy php8.1-cli php8.2-cli php8.3-cli"
+        error ""
+        error "Note: PHP 8.1+ is required for Laravel 11. If unavailable, consider:"
+        error "- Upgrading to Ubuntu 22.04 LTS (recommended)"
+        error "- Using a different PHP installation method"
         exit 1
     fi
     
