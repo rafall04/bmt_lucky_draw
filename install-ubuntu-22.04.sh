@@ -1017,19 +1017,26 @@ install_dependencies() {
                 log "Updating composer dependencies to resolve compatibility..."
                 
                 # For PHP 8.5, we need to update packages to compatible versions
-                # First, try to update specific packages that are known to have issues
-                log "Updating maatwebsite/excel and phpspreadsheet to PHP 8.5 compatible versions..."
+                # phpspreadsheet 1.30.x doesn't support PHP 8.5, need 1.31+ or 2.x
+                log "Updating phpspreadsheet and maatwebsite/excel to PHP 8.5 compatible versions..."
                 
-                # Update composer dependencies to fix lock file
-                # Use --with-all-dependencies to ensure all related packages are updated
-                if ! composer update maatwebsite/excel phpoffice/phpspreadsheet --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
-                    warn "Specific package update failed, trying full update..."
-                    if ! composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
-                        warn "Composer update failed, trying with --ignore-platform-reqs..."
-                        if ! composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
-                            error "Failed to update dependencies"
-                            rm -f "$COMPOSER_OUTPUT"
-                            exit 1
+                # First, try to update phpspreadsheet to latest version that supports PHP 8.5
+                # phpspreadsheet 1.31+ or 2.x supports PHP 8.5
+                log "Attempting to update phpspreadsheet to PHP 8.5 compatible version..."
+                if ! composer require phpoffice/phpspreadsheet:"^1.31|^2.0" --no-dev --no-interaction --update-with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                    warn "Direct phpspreadsheet update failed, trying full update..."
+                    # Try full update to let composer resolve dependencies
+                    if ! composer update phpoffice/phpspreadsheet maatwebsite/excel --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                        warn "Specific package update failed, trying full update..."
+                        if ! composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE"; then
+                            warn "Composer update failed, trying with --ignore-platform-reqs as last resort..."
+                            warn "⚠️  WARNING: Using --ignore-platform-reqs may cause runtime issues"
+                            if ! composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                                error "Failed to update dependencies"
+                                error "You may need to manually update composer.json to allow phpspreadsheet ^1.31 or ^2.0"
+                                rm -f "$COMPOSER_OUTPUT"
+                                exit 1
+                            fi
                         fi
                     fi
                 fi
