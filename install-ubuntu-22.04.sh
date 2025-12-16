@@ -1044,18 +1044,51 @@ install_dependencies() {
     # Install NPM dependencies
     log "Installing NPM dependencies..."
     if [ -f "package.json" ]; then
-        # Install ALL dependencies (including dev) because vite is needed for build
+        # Step 1: Clean slate - Remove existing node_modules to prevent permission conflicts
+        if [ -d "node_modules" ]; then
+            log "Removing existing node_modules for clean installation..."
+            rm -rf node_modules || true
+            log "✓ Cleaned existing node_modules"
+        fi
+        
+        # Step 2: Install ALL dependencies (including dev) because vite is needed for build
+        # Use --unsafe-perm and --allow-root when running as root to avoid permission issues
         log "Installing NPM dependencies (including dev dependencies for build tools)..."
-        npm install 2>&1 | tee -a "$LOG_FILE" || {
-            error "Failed to install NPM dependencies"
-            exit 1
-        }
+        if [ "$IS_ROOT" = true ]; then
+            log "Running as root - using --unsafe-perm=true --allow-root flags"
+            npm install --unsafe-perm=true --allow-root 2>&1 | tee -a "$LOG_FILE" || {
+                error "Failed to install NPM dependencies"
+                exit 1
+            }
+        else
+            npm install 2>&1 | tee -a "$LOG_FILE" || {
+                error "Failed to install NPM dependencies"
+                exit 1
+            }
+        fi
         log "✓ NPM dependencies installed"
         
+        # Step 3: CRITICAL FIX - Fix executable permissions for binaries in node_modules/.bin
+        # This fixes "vite: Permission denied" error
+        if [ -d "node_modules/.bin" ]; then
+            log "Fixing executable permissions for NPM binaries..."
+            chmod -R +x node_modules/.bin 2>&1 | tee -a "$LOG_FILE" || {
+                warn "Failed to set executable permissions, trying with sudo..."
+                $SUDO_CMD chmod -R +x node_modules/.bin 2>&1 | tee -a "$LOG_FILE" || {
+                    warn "Permission fix failed, but continuing..."
+                }
+            }
+            log "✓ Executable permissions fixed for node_modules/.bin"
+        else
+            warn "node_modules/.bin directory not found, skipping permission fix"
+        fi
+        
+        # Step 4: Build assets (only after permissions are fixed)
         log "Building assets..."
         npm run build 2>&1 | tee -a "$LOG_FILE" || {
             error "Failed to build assets"
-            error "Make sure vite is installed: npm install"
+            error "Check if vite has executable permissions: ls -la node_modules/.bin/vite"
+            error "If permission denied, run: chmod +x node_modules/.bin/*"
             exit 1
         }
         log "✓ Assets built successfully"
