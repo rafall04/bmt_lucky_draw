@@ -968,7 +968,8 @@ install_dependencies() {
         # NUCLEAR FIX: Reset Composer environment to resolve dependency conflicts
         log "Resetting Composer environment to resolve dependency conflicts..."
         
-        # Step 1: Remove stale state (composer.lock and vendor)
+        # Step 1: Clean environment - Remove stale state (composer.lock and vendor)
+        log "Cleaning Composer environment..."
         if [ -f "composer.lock" ]; then
             log "Removing stale composer.lock..."
             rm -f composer.lock || true
@@ -978,49 +979,55 @@ install_dependencies() {
             log "Removing stale vendor directory..."
             rm -rf vendor || true
         fi
+        log "✓ Environment cleaned"
         
         # Step 2: Remove conflicting phpspreadsheet constraint from composer.json
         # Let maatwebsite/excel determine the correct version
+        log "Removing conflicting phpspreadsheet constraint from composer.json..."
+        log "Letting maatwebsite/excel determine the correct version..."
+        
+        # Try to remove via composer (use || true to not exit if package doesn't exist)
+        composer remove phpoffice/phpspreadsheet --no-interaction 2>&1 | tee -a "$LOG_FILE" || true
+        
+        # Verify removal (check if still exists in composer.json)
         if grep -q '"phpoffice/phpspreadsheet"' composer.json; then
-            log "Removing conflicting phpspreadsheet constraint from composer.json..."
-            log "Letting maatwebsite/excel determine the correct version..."
-            
-            if ! composer remove phpoffice/phpspreadsheet --no-update --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
-                warn "Failed to remove phpspreadsheet via composer, trying manual removal..."
-                # Manual removal as fallback
-                if command -v jq &>/dev/null; then
-                    # Use jq if available
-                    jq 'del(.require."phpoffice/phpspreadsheet")' composer.json > composer.json.tmp && mv composer.json.tmp composer.json
-                else
-                    # Fallback: use sed to remove the line
-                    sed -i '/"phpoffice\/phpspreadsheet"/d' composer.json
-                fi
-                log "✓ Manually removed phpspreadsheet from composer.json"
+            warn "phpspreadsheet still in composer.json, trying manual removal..."
+            # Manual removal as fallback
+            if command -v jq &>/dev/null; then
+                # Use jq if available (cleaner JSON manipulation)
+                jq 'del(.require."phpoffice/phpspreadsheet")' composer.json > composer.json.tmp && mv composer.json.tmp composer.json
+                log "✓ Manually removed phpspreadsheet using jq"
             else
-                log "✓ Removed phpspreadsheet constraint via composer"
+                # Fallback: use sed to remove the line
+                sed -i '/"phpoffice\/phpspreadsheet"/d' composer.json
+                log "✓ Manually removed phpspreadsheet using sed"
             fi
         else
-            log "✓ No phpspreadsheet constraint found in composer.json"
+            log "✓ phpspreadsheet constraint removed from composer.json"
         fi
         
-        # Step 3: Install maatwebsite/excel with all dependencies
+        # Step 3: Register maatwebsite/excel package (CRITICAL: NO --no-dev flag here!)
+        # The 'require' command does NOT support --no-dev flag
         # This will let Composer find the best compatible version set for PHP 8.3
-        log "Installing maatwebsite/excel with automatic dependency resolution..."
-        if ! composer require maatwebsite/excel --with-all-dependencies --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+        log "Registering maatwebsite/excel with automatic dependency resolution..."
+        log "Note: Using 'composer require' without --no-dev (flag not supported by require command)"
+        
+        if ! composer require maatwebsite/excel --with-all-dependencies --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
             warn "Direct require failed, trying with --ignore-platform-reqs..."
-            if ! composer require maatwebsite/excel --with-all-dependencies --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
-                error "Failed to install maatwebsite/excel"
+            if ! composer require maatwebsite/excel --with-all-dependencies --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                error "Failed to register maatwebsite/excel"
                 error "Please check the error messages above"
                 exit 1
             fi
         fi
+        log "✓ maatwebsite/excel registered successfully"
         
-        # Step 4: Final install with all dependencies
-        log "Running final composer install with all dependencies..."
+        # Step 4: Final production install (NOW use --no-dev flag)
+        # The 'install' command supports --no-dev flag
+        log "Running final production install (excluding dev dependencies)..."
         
-        # Final install with optimized autoloader
         if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
-            warn "Composer install failed, trying with --ignore-platform-reqs as fallback..."
+            warn "Production install failed, trying with --ignore-platform-reqs as fallback..."
             if ! composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
                 error "Failed to install dependencies even with --ignore-platform-reqs"
                 error "Please check the error messages above"
