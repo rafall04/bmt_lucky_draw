@@ -1784,9 +1784,20 @@ configure_apache() {
     APACHE_CONFIG="/etc/apache2/sites-available/bmt_lucky_draw.conf"
     
     log "Creating Apache configuration..."
+    
+    # Build ServerAlias if IP provided
+    if [ -n "$SERVER_IP" ]; then
+        SERVER_ALIAS="ServerAlias ${SERVER_IP}"
+        log "✓ Configuring for domain: $DOMAIN and IP: $SERVER_IP"
+    else
+        SERVER_ALIAS=""
+        log "✓ Configuring for domain: $DOMAIN"
+    fi
+    
     $SUDO_CMD tee "$APACHE_CONFIG" > /dev/null <<EOF
 <VirtualHost *:80>
     ServerName ${DOMAIN}
+    ${SERVER_ALIAS}
     DocumentRoot ${PROJECT_DIR}/public
     
     <Directory ${PROJECT_DIR}/public>
