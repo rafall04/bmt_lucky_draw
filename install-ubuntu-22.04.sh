@@ -67,22 +67,25 @@ verify_installation() {
 rollback() {
     error "Installation failed! Starting rollback..."
     
+    # Use SUDO_CMD variable (empty if root)
+    SUDO_CMD="${SUDO_CMD:-sudo}"
+    
     # Remove installed packages
     if [ ${#INSTALLED_PACKAGES[@]} -gt 0 ]; then
         warn "Removing installed packages..."
-        sudo apt-get remove -y "${INSTALLED_PACKAGES[@]}" 2>/dev/null || true
+        $SUDO_CMD apt-get remove -y "${INSTALLED_PACKAGES[@]}" 2>/dev/null || true
     fi
     
     # Remove added repositories
     for repo in "${INSTALLED_REPOS[@]}"; do
         warn "Removing repository: $repo"
-        sudo add-apt-repository --remove "$repo" -y 2>/dev/null || true
+        $SUDO_CMD add-apt-repository --remove "$repo" -y 2>/dev/null || true
     done
     
     # Restore backup if exists
     if [ -d "$BACKUP_DIR" ]; then
         warn "Restoring from backup..."
-        sudo cp -r "$BACKUP_DIR"/* "$INSTALL_DIR"/ 2>/dev/null || true
+        $SUDO_CMD cp -r "$BACKUP_DIR"/* "$INSTALL_DIR"/ 2>/dev/null || true
     fi
     
     error "Rollback completed. Check log: $LOG_FILE"
@@ -98,10 +101,33 @@ trap rollback ERR
 pre_checks() {
     step "Pre-Installation Checks"
     
-    # Check if running as root (we need sudo)
+    # Detect if running as root
+    IS_ROOT=false
+    SUDO_CMD="sudo"
     if [ "$EUID" -eq 0 ]; then
-        error "Please do not run as root. Script will use sudo when needed."
-        exit 1
+        IS_ROOT=true
+        SUDO_CMD=""  # No need for sudo if already root
+        warn "⚠️  Running as root user"
+        warn "⚠️  This is less secure but will avoid permission issues"
+        warn "⚠️  For production, consider using a non-root user with sudo"
+        echo ""
+        read -p "Continue as root? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log "Exiting. Please run as a non-root user."
+            exit 0
+        fi
+    else
+        log "Running as non-root user (will use sudo when needed)"
+        # Check if sudo is available
+        if ! command -v sudo &> /dev/null; then
+            error "sudo is not available. Please install sudo or run as root."
+            exit 1
+        fi
+        # Check if user has sudo privileges
+        if ! sudo -n true 2>/dev/null; then
+            log "You may be prompted for sudo password during installation"
+        fi
     fi
     
     # Check Ubuntu version
