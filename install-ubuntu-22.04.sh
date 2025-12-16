@@ -1596,6 +1596,12 @@ server {
         fastcgi_param PATH_INFO \$fastcgi_path_info;
         include fastcgi_params;
         fastcgi_read_timeout 300;
+        
+        # Forward proxy headers for Cloudflare Tunnel / Load Balancers
+        fastcgi_param HTTP_X_FORWARDED_PROTO \$http_x_forwarded_proto;
+        fastcgi_param HTTP_X_FORWARDED_FOR \$proxy_add_x_forwarded_for;
+        fastcgi_param HTTP_X_FORWARDED_HOST \$http_x_forwarded_host;
+        fastcgi_param HTTP_X_REAL_IP \$remote_addr;
     }
 
     location ~ /\.(?!well-known).* {
