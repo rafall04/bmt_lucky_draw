@@ -619,16 +619,32 @@ install_composer() {
         exit 1
     }
     
-    log "Installing Composer..."
-    php composer-installer.php --install-dir=/usr/local/bin --filename=composer || {
+    log "Installing Composer to /usr/local/bin..."
+    # Use sudo to install to /usr/local/bin
+    sudo php composer-installer.php --install-dir=/usr/local/bin --filename=composer || {
         error "Failed to install Composer"
-        exit 1
+        error "Trying alternative installation method..."
+        # Alternative: Install to user's local bin
+        mkdir -p ~/.local/bin 2>/dev/null || true
+        php composer-installer.php --install-dir=~/.local/bin --filename=composer || {
+            error "Failed to install Composer with alternative method"
+            rm -f composer-installer.php
+            exit 1
+        }
+        # Add to PATH if not already there
+        if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
+        log "✓ Composer installed to ~/.local/bin"
     }
     
     rm -f composer-installer.php
     
     # Verify installation
     if ! verify_installation composer; then
+        error "Composer installation verification failed"
+        error "Please check if Composer is in PATH: which composer"
         exit 1
     fi
     
@@ -847,9 +863,22 @@ install_dependencies() {
     # Install PHP dependencies
     log "Installing PHP dependencies with Composer..."
     if [ -f "composer.json" ]; then
-        sudo -u www-data composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
-            error "Failed to install PHP dependencies"
+        # Check if composer is available
+        if ! command -v composer &>/dev/null; then
+            error "Composer is not available in PATH"
+            error "Please ensure Composer is installed and in PATH"
             exit 1
+        fi
+        
+        # Install dependencies - use current user, not www-data (permissions will be fixed later)
+        log "Running composer install..."
+        composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
+            error "Failed to install PHP dependencies"
+            error "Trying with --ignore-platform-reqs flag..."
+            composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE" || {
+                error "Composer install failed even with --ignore-platform-reqs"
+                exit 1
+            }
         }
         log "✓ PHP dependencies installed"
     else
