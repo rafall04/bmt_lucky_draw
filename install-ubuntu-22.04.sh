@@ -1141,28 +1141,103 @@ setup_database() {
     DB_NAME=${DB_NAME:-bmt_lucky_draw}
     DB_USER=${DB_USER:-bmt_user}
     
+    # Ask for database password if not set
     if [ -z "$DB_PASS" ]; then
-        read -sp "MySQL root password: " MYSQL_ROOT_PASS
+        echo ""
+        echo "════════════════════════════════════════════════════════════"
+        echo "  Database Setup"
+        echo "════════════════════════════════════════════════════════════"
+        echo ""
+        echo "Anda perlu membuat password untuk database user '$DB_USER'."
+        echo "Password ini akan digunakan oleh aplikasi untuk mengakses database."
+        echo ""
+        echo "⚠️  PENTING:"
+        echo "   - Buat password yang kuat (minimal 8 karakter)"
+        echo "   - Simpan password ini dengan aman"
+        echo "   - Password ini akan disimpan di file .env"
+        echo ""
+        read -sp "Masukkan password untuk database user '$DB_USER': " DB_PASS
         echo
-        read -sp "Database password for $DB_USER: " DB_PASS
+        if [ -z "$DB_PASS" ]; then
+            error "Password tidak boleh kosong!"
+            exit 1
+        fi
+        read -sp "Konfirmasi password: " DB_PASS_CONFIRM
         echo
-    else
-        read -sp "MySQL root password: " MYSQL_ROOT_PASS
-        echo
+        if [ "$DB_PASS" != "$DB_PASS_CONFIRM" ]; then
+            error "Password tidak cocok!"
+            exit 1
+        fi
     fi
     
     log "Creating database and user..."
     
+    # Try to access MySQL - Ubuntu typically uses auth_socket for root
+    # First try with sudo (no password needed for auth_socket)
+    log "Attempting to access MySQL..."
+    
+    MYSQL_CMD=""
+    MYSQL_ACCESS_METHOD=""
+    
+    # Method 1: Try sudo mysql (for auth_socket plugin - Ubuntu default)
+    if sudo mysql -e "SELECT 1;" >/dev/null 2>&1; then
+        MYSQL_CMD="sudo mysql"
+        MYSQL_ACCESS_METHOD="sudo"
+        log "✓ MySQL access via sudo (auth_socket) successful"
+    # Method 2: Try mysql -u root without password
+    elif mysql -u root -e "SELECT 1;" >/dev/null 2>&1; then
+        MYSQL_CMD="mysql -u root"
+        MYSQL_ACCESS_METHOD="root_no_pass"
+        log "✓ MySQL access as root without password successful"
+    # Method 3: Ask for root password
+    else
+        echo ""
+        echo "MySQL root access memerlukan autentikasi."
+        echo "Di Ubuntu, biasanya root menggunakan 'auth_socket' plugin."
+        echo ""
+        echo "Opsi:"
+        echo "  1) Tekan Enter untuk mencoba dengan sudo (tidak perlu password)"
+        echo "  2) Atau masukkan MySQL root password jika sudah di-set"
+        echo ""
+        read -sp "MySQL root password (atau Enter untuk skip): " MYSQL_ROOT_PASS
+        echo
+        
+        if [ -z "$MYSQL_ROOT_PASS" ]; then
+            # Try sudo mysql
+            if sudo mysql -e "SELECT 1;" >/dev/null 2>&1; then
+                MYSQL_CMD="sudo mysql"
+                MYSQL_ACCESS_METHOD="sudo"
+                log "✓ MySQL access via sudo successful"
+            else
+                error "Tidak bisa mengakses MySQL. Pastikan MySQL sudah terinstall dan running."
+                error "Coba jalankan: sudo systemctl status mysql"
+                exit 1
+            fi
+        else
+            # Try with password
+            if mysql -u root -p"$MYSQL_ROOT_PASS" -e "SELECT 1;" >/dev/null 2>&1; then
+                MYSQL_CMD="mysql -u root -p$MYSQL_ROOT_PASS"
+                MYSQL_ACCESS_METHOD="root_with_pass"
+                log "✓ MySQL access with password successful"
+            else
+                error "Password MySQL root salah atau MySQL tidak bisa diakses"
+                exit 1
+            fi
+        fi
+    fi
+    
     # Create database and user
-    mysql -u root -p"$MYSQL_ROOT_PASS" <<EOF 2>&1 | tee -a "$LOG_FILE"
-CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    log "Creating database '$DB_NAME' and user '$DB_USER'..."
+    $MYSQL_CMD <<EOF 2>&1 | tee -a "$LOG_FILE"
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
     
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         error "Failed to create database"
+        error "Please check MySQL access and try again"
         exit 1
     fi
     
