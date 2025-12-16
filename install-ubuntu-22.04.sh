@@ -332,6 +332,7 @@ install_php() {
     fi
     
     # Install PHP and extensions based on available version
+    # Note: json and opcache are built-in for PHP 8.0+, no need to install separately
     PHP_PACKAGES=(
         "php${PHP_VERSION}"
         "php${PHP_VERSION}-cli"
@@ -347,8 +348,6 @@ install_php() {
         "php${PHP_VERSION}-intl"
         "php${PHP_VERSION}-readline"
         "php${PHP_VERSION}-tokenizer"
-        "php${PHP_VERSION}-json"
-        "php${PHP_VERSION}-opcache"
     )
     
     log "Installing PHP ${PHP_VERSION} packages..."
