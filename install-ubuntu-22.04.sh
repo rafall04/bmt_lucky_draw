@@ -1419,23 +1419,42 @@ configure_nginx() {
     read -p "Domain name (or IP): " DOMAIN
     DOMAIN=${DOMAIN:-localhost}
     
-    # Detect PHP version if not set
-    if [ -z "${PHP_VERSION_INSTALLED:-}" ]; then
-        if command -v php &>/dev/null; then
-            PHP_VERSION_INSTALLED=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
-        else
-            # Try to detect from installed packages
-            PHP_VERSION_INSTALLED=$(dpkg -l | grep -oP 'php\K[0-9]+\.[0-9]+' | head -n 1 | cut -c 1-3)
-            if [ -z "$PHP_VERSION_INSTALLED" ]; then
-                PHP_VERSION_INSTALLED="8.2"  # Default fallback for Ubuntu 22.04
-            fi
-        fi
+    # Force PHP 8.3 (we installed PHP 8.3 explicitly)
+    PHP_VERSION_INSTALLED="8.3"
+    
+    # Verify PHP-FPM is installed and running
+    log "Verifying PHP-FPM 8.3 installation..."
+    if ! systemctl is-active --quiet php8.3-fpm; then
+        log "PHP-FPM 8.3 is not running, starting it..."
+        $SUDO_CMD systemctl start php8.3-fpm || {
+            error "Failed to start PHP-FPM 8.3"
+            exit 1
+        }
     fi
+    
+    # Enable and ensure PHP-FPM starts on boot
+    $SUDO_CMD systemctl enable php8.3-fpm || true
+    
+    # Verify PHP-FPM socket exists
+    PHP_FPM_SOCKET="/var/run/php/php8.3-fpm.sock"
+    if [ ! -S "$PHP_FPM_SOCKET" ]; then
+        error "PHP-FPM socket not found at $PHP_FPM_SOCKET"
+        error "Please check PHP-FPM configuration"
+        log "Checking PHP-FPM status..."
+        $SUDO_CMD systemctl status php8.3-fpm || true
+        exit 1
+    fi
+    
+    # Fix socket permissions if needed
+    $SUDO_CMD chown www-data:www-data "$PHP_FPM_SOCKET" 2>/dev/null || true
+    $SUDO_CMD chmod 666 "$PHP_FPM_SOCKET" 2>/dev/null || true
+    
+    log "✓ PHP-FPM 8.3 verified and running"
     
     NGINX_CONFIG="/etc/nginx/sites-available/bmt_lucky_draw"
     
     log "Creating Nginx configuration for PHP ${PHP_VERSION_INSTALLED}..."
-    sudo tee "$NGINX_CONFIG" > /dev/null <<EOF
+    $SUDO_CMD tee "$NGINX_CONFIG" > /dev/null <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -1460,7 +1479,9 @@ server {
     location ~ \.php$ {
         fastcgi_pass unix:/var/run/php/php${PHP_VERSION_INSTALLED}-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+        fastcgi_param PATH_INFO \$fastcgi_path_info;
         include fastcgi_params;
+        fastcgi_read_timeout 300;
     }
 
     location ~ /\.(?!well-known).* {
@@ -1470,22 +1491,32 @@ server {
 EOF
     
     # Enable site
-    sudo ln -sf "$NGINX_CONFIG" /etc/nginx/sites-enabled/bmt_lucky_draw || true
-    sudo rm -f /etc/nginx/sites-enabled/default || true
+    $SUDO_CMD ln -sf "$NGINX_CONFIG" /etc/nginx/sites-enabled/bmt_lucky_draw || true
+    $SUDO_CMD rm -f /etc/nginx/sites-enabled/default || true
     
     # Test configuration
-    sudo nginx -t 2>&1 | tee -a "$LOG_FILE" || {
+    $SUDO_CMD nginx -t 2>&1 | tee -a "$LOG_FILE" || {
         error "Nginx configuration test failed"
         exit 1
     }
     
     # Reload Nginx
-    sudo systemctl reload nginx || {
+    $SUDO_CMD systemctl reload nginx || {
         error "Failed to reload Nginx"
         exit 1
     }
     
+    # Verify PHP-FPM is still running after reload
+    if ! systemctl is-active --quiet php8.3-fpm; then
+        warn "PHP-FPM stopped, restarting..."
+        $SUDO_CMD systemctl restart php8.3-fpm || {
+            error "Failed to restart PHP-FPM"
+            exit 1
+        }
+    fi
+    
     log "✓ Nginx configured for $DOMAIN"
+    log "✓ PHP-FPM 8.3 is running and connected"
 }
 
 configure_apache() {
@@ -1494,10 +1525,28 @@ configure_apache() {
     read -p "Domain name (or IP): " DOMAIN
     DOMAIN=${DOMAIN:-localhost}
     
+    # Force PHP 8.3 (we installed PHP 8.3 explicitly)
+    PHP_VERSION_INSTALLED="8.3"
+    
+    # Verify PHP-FPM is installed and running (Apache uses PHP-FPM via mod_proxy_fcgi)
+    log "Verifying PHP-FPM 8.3 installation..."
+    if ! systemctl is-active --quiet php8.3-fpm; then
+        log "PHP-FPM 8.3 is not running, starting it..."
+        $SUDO_CMD systemctl start php8.3-fpm || {
+            error "Failed to start PHP-FPM 8.3"
+            exit 1
+        }
+    fi
+    
+    # Enable and ensure PHP-FPM starts on boot
+    $SUDO_CMD systemctl enable php8.3-fpm || true
+    
+    log "✓ PHP-FPM 8.3 verified and running"
+    
     APACHE_CONFIG="/etc/apache2/sites-available/bmt_lucky_draw.conf"
     
     log "Creating Apache configuration..."
-    sudo tee "$APACHE_CONFIG" > /dev/null <<EOF
+    $SUDO_CMD tee "$APACHE_CONFIG" > /dev/null <<EOF
 <VirtualHost *:80>
     ServerName ${DOMAIN}
     DocumentRoot ${PROJECT_DIR}/public
@@ -1505,31 +1554,53 @@ configure_apache() {
     <Directory ${PROJECT_DIR}/public>
         AllowOverride All
         Require all granted
+        Options -Indexes +FollowSymLinks
     </Directory>
+    
+    # PHP-FPM configuration for PHP 8.3
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/var/run/php/php${PHP_VERSION_INSTALLED}-fpm.sock|fcgi://localhost"
+    </FilesMatch>
     
     ErrorLog \${APACHE_LOG_DIR}/bmt_lucky_draw_error.log
     CustomLog \${APACHE_LOG_DIR}/bmt_lucky_draw_access.log combined
 </VirtualHost>
 EOF
     
-    # Enable site and modules
-    sudo a2ensite bmt_lucky_draw.conf || true
-    sudo a2dissite 000-default.conf || true
-    sudo a2enmod rewrite || true
+    # Enable required Apache modules
+    log "Enabling required Apache modules..."
+    $SUDO_CMD a2enmod rewrite || true
+    $SUDO_CMD a2enmod proxy || true
+    $SUDO_CMD a2enmod proxy_fcgi || true
+    $SUDO_CMD a2enmod setenvif || true
+    
+    # Enable site and disable default
+    $SUDO_CMD a2ensite bmt_lucky_draw.conf || true
+    $SUDO_CMD a2dissite 000-default.conf || true
     
     # Test configuration
-    sudo apache2ctl configtest 2>&1 | tee -a "$LOG_FILE" || {
+    $SUDO_CMD apache2ctl configtest 2>&1 | tee -a "$LOG_FILE" || {
         error "Apache configuration test failed"
         exit 1
     }
     
     # Restart Apache
-    sudo systemctl restart apache2 || {
+    $SUDO_CMD systemctl restart apache2 || {
         error "Failed to restart Apache"
         exit 1
     }
     
+    # Verify PHP-FPM is still running after restart
+    if ! systemctl is-active --quiet php8.3-fpm; then
+        warn "PHP-FPM stopped, restarting..."
+        $SUDO_CMD systemctl restart php8.3-fpm || {
+            error "Failed to restart PHP-FPM"
+            exit 1
+        }
+    fi
+    
     log "✓ Apache configured for $DOMAIN"
+    log "✓ PHP-FPM 8.3 is running and connected"
 }
 
 ###############################################################################
