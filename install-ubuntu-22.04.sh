@@ -871,7 +871,7 @@ configure_nginx() {
             # Try to detect from installed packages
             PHP_VERSION_INSTALLED=$(dpkg -l | grep -oP 'php\K[0-9]+\.[0-9]+' | head -n 1 | cut -c 1-3)
             if [ -z "$PHP_VERSION_INSTALLED" ]; then
-                PHP_VERSION_INSTALLED="8.3"  # Default fallback
+                PHP_VERSION_INSTALLED="8.2"  # Default fallback for Ubuntu 22.04
             fi
         fi
     fi
