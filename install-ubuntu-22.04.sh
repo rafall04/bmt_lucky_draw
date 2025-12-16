@@ -592,7 +592,8 @@ EOF
     # Final opcache check (optional, don't fail if not enabled)
     if ! php -m | grep -qi "^opcache$"; then
         warn "⚠ Opcache is not enabled (optional but recommended for production)"
-        warn "⚠ To enable opcache, restart PHP-FPM after installation completes"
+        warn "⚠ Opcache configuration has been created, restart PHP-FPM to enable:"
+        warn "⚠   sudo systemctl restart php${PHP_VERSION}-fpm"
     fi
     
     # Store PHP version for later use
