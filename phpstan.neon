@@ -1,0 +1,15 @@
+parameters:
+    level: 5
+    paths:
+        - app
+        - config
+        - database
+        - routes
+    excludePaths:
+        - ./*/*/FileToIgnore.php
+    ignoreErrors:
+        - '#PHPDoc tag @var#'
+        - '#Access to an undefined property#'
+    checkMissingIterableValueType: false
+    checkGenericClassInNonGenericObjectType: false
+

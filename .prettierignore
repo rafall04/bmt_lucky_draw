@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+public/build/
+public/hot/
+public/storage/
+
+# Cache
+bootstrap/cache/
+storage/framework/cache/
+storage/framework/views/
+storage/logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Laravel
+.env
+.env.backup
+.phpunit.result.cache
+
+# Compiled assets
+*.min.js
+*.min.css
+
