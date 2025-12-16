@@ -950,20 +950,13 @@ install_dependencies() {
             exit 1
         fi
         
-        # Check if composer.lock exists and if it's compatible with current PHP version
-        if [ -f "composer.lock" ]; then
-            PHP_MAJOR=$(php -r 'echo PHP_MAJOR_VERSION;')
-            PHP_MINOR=$(php -r 'echo PHP_MINOR_VERSION;')
-            log "Detected PHP version: ${PHP_MAJOR}.${PHP_MINOR}"
-            
-            # Check if lock file might be incompatible (PHP 8.5+ may have issues with old packages)
-            if [ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -ge 5 ]; then
-                log "PHP 8.5+ detected, checking lock file compatibility..."
-                # Try to validate lock file
-                if ! composer validate --no-check-publish 2>/dev/null | grep -q "is valid"; then
-                    warn "Lock file may be incompatible, will try to update if needed"
-                fi
-            fi
+        # Verify PHP version is 8.3
+        PHP_VERSION_CHECK=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
+        if [ "$PHP_VERSION_CHECK" != "8.3" ]; then
+            warn "PHP version is $PHP_VERSION_CHECK, expected 8.3"
+            warn "This may cause compatibility issues"
+        else
+            log "✓ PHP version verified: $PHP_VERSION_CHECK"
         fi
         
         # Set COMPOSER_ALLOW_SUPERUSER if running as root
@@ -972,14 +965,68 @@ install_dependencies() {
             log "Running as root - enabling COMPOSER_ALLOW_SUPERUSER"
         fi
         
-        # Install dependencies - use current user, not www-data (permissions will be fixed later)
-        log "Running composer install..."
+        # NUCLEAR FIX: Reset Composer environment to resolve dependency conflicts
+        log "Resetting Composer environment to resolve dependency conflicts..."
         
-        # Capture output to check for compatibility issues
-        COMPOSER_OUTPUT=$(mktemp)
-        COMPOSER_EXIT_CODE=0
-        # Try with --ignore-platform-req=php+ as safety net (PHP 8.3 should work, but just in case)
-        composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-req=php+ 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE" || COMPOSER_EXIT_CODE=$?
+        # Step 1: Remove stale state (composer.lock and vendor)
+        if [ -f "composer.lock" ]; then
+            log "Removing stale composer.lock..."
+            rm -f composer.lock || true
+        fi
+        
+        if [ -d "vendor" ]; then
+            log "Removing stale vendor directory..."
+            rm -rf vendor || true
+        fi
+        
+        # Step 2: Remove conflicting phpspreadsheet constraint from composer.json
+        # Let maatwebsite/excel determine the correct version
+        if grep -q '"phpoffice/phpspreadsheet"' composer.json; then
+            log "Removing conflicting phpspreadsheet constraint from composer.json..."
+            log "Letting maatwebsite/excel determine the correct version..."
+            
+            if ! composer remove phpoffice/phpspreadsheet --no-update --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+                warn "Failed to remove phpspreadsheet via composer, trying manual removal..."
+                # Manual removal as fallback
+                if command -v jq &>/dev/null; then
+                    # Use jq if available
+                    jq 'del(.require."phpoffice/phpspreadsheet")' composer.json > composer.json.tmp && mv composer.json.tmp composer.json
+                else
+                    # Fallback: use sed to remove the line
+                    sed -i '/"phpoffice\/phpspreadsheet"/d' composer.json
+                fi
+                log "✓ Manually removed phpspreadsheet from composer.json"
+            else
+                log "✓ Removed phpspreadsheet constraint via composer"
+            fi
+        else
+            log "✓ No phpspreadsheet constraint found in composer.json"
+        fi
+        
+        # Step 3: Install maatwebsite/excel with all dependencies
+        # This will let Composer find the best compatible version set for PHP 8.3
+        log "Installing maatwebsite/excel with automatic dependency resolution..."
+        if ! composer require maatwebsite/excel --with-all-dependencies --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+            warn "Direct require failed, trying with --ignore-platform-reqs..."
+            if ! composer require maatwebsite/excel --with-all-dependencies --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                error "Failed to install maatwebsite/excel"
+                error "Please check the error messages above"
+                exit 1
+            fi
+        fi
+        
+        # Step 4: Final install with all dependencies
+        log "Running final composer install with all dependencies..."
+        
+        # Final install with optimized autoloader
+        if ! composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+            warn "Composer install failed, trying with --ignore-platform-reqs as fallback..."
+            if ! composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE"; then
+                error "Failed to install dependencies even with --ignore-platform-reqs"
+                error "Please check the error messages above"
+                exit 1
+            fi
+        fi
         
         if [ $COMPOSER_EXIT_CODE -ne 0 ]; then
             error "Failed to install PHP dependencies"
