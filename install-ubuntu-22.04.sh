@@ -1572,11 +1572,6 @@ server {
     add_header X-Frame-Options "SAMEORIGIN";
     add_header X-Content-Type-Options "nosniff";
 
-    # Trust proxy headers (for Cloudflare Tunnel, load balancers, etc.)
-    real_ip_header X-Forwarded-For;
-    set_real_ip_from 0.0.0.0/0;
-    real_ip_recursive on;
-
     index index.php;
 
     charset utf-8;
