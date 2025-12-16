@@ -602,15 +602,17 @@ setup_database() {
     log "Creating database and user..."
     
     # Create database and user
-    mysql -u root -p"$MYSQL_ROOT_PASS" <<EOF 2>&1 | tee -a "$LOG_FILE" || {
-        error "Failed to create database"
-        exit 1
-    }
+    mysql -u root -p"$MYSQL_ROOT_PASS" <<EOF 2>&1 | tee -a "$LOG_FILE"
 CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOF
+    
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        error "Failed to create database"
+        exit 1
+    fi
     
     log "✓ Database and user created"
     
@@ -789,7 +791,7 @@ EOF
 # Final Verification
 ###############################################################################
 
-verify_installation() {
+final_verification() {
     step "Final Verification"
     
     # Check PHP
@@ -876,7 +878,7 @@ main() {
     setup_database
     setup_permissions
     configure_webserver
-    verify_installation
+    final_verification
     
     # Success message
     step "Installation Complete!"
