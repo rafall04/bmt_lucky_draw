@@ -197,32 +197,45 @@ install_php() {
     # Check which PHP version is available
     PHP_VERSION=""
     
-    # Use apt-cache policy which is more reliable than apt-cache show
     log "Checking available PHP versions in repository..."
     
-    if apt-cache policy php8.3-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.3-cli 2>/dev/null | grep -q "Candidate: (none)"; then
-        PHP_VERSION="8.3"
-        log "PHP 8.3 is available in repository"
-    elif apt-cache policy php8.2-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.2-cli 2>/dev/null | grep -q "Candidate: (none)"; then
-        PHP_VERSION="8.2"
-        warn "PHP 8.3 not available, using PHP 8.2 instead"
-    elif apt-cache policy php8.1-cli 2>/dev/null | grep -q "Candidate:" && ! apt-cache policy php8.1-cli 2>/dev/null | grep -q "Candidate: (none)"; then
-        PHP_VERSION="8.1"
-        warn "PHP 8.3 not available, using PHP 8.1 instead"
-    else
-        # Try alternative method: search for available PHP packages
-        log "Trying alternative method to detect PHP versions..."
-        AVAILABLE_PHP=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V | tail -1)
-        
-        if [ -n "$AVAILABLE_PHP" ]; then
-            PHP_VERSION="$AVAILABLE_PHP"
-            log "Found PHP ${PHP_VERSION} using alternative detection method"
-        else
-            error "No suitable PHP version (8.1+) found in repository"
-            error "Available PHP packages:"
-            apt-cache search --names-only "^php[0-9]" 2>/dev/null | grep -E "^php[0-9]\.[0-9]-cli" | head -5 || true
-            exit 1
-        fi
+    # Method 1: Try apt-cache search (most reliable)
+    AVAILABLE_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V -r | head -3)
+    
+    if [ -n "$AVAILABLE_VERSIONS" ]; then
+        # Find the highest version >= 8.1
+        for version in $AVAILABLE_VERSIONS; do
+            MAJOR=$(echo "$version" | cut -d. -f1)
+            MINOR=$(echo "$version" | cut -d. -f2)
+            if [ "$MAJOR" -gt 8 ] || ([ "$MAJOR" -eq 8 ] && [ "$MINOR" -ge 1 ]); then
+                PHP_VERSION="$version"
+                log "Found PHP ${PHP_VERSION} in repository"
+                break
+            fi
+        done
+    fi
+    
+    # Method 2: Fallback to direct policy check if search didn't work
+    if [ -z "$PHP_VERSION" ]; then
+        log "Trying alternative detection method..."
+        for version in "8.3" "8.2" "8.1"; do
+            POLICY_OUTPUT=$(apt-cache policy "php${version}-cli" 2>/dev/null)
+            if echo "$POLICY_OUTPUT" | grep -q "Candidate:" && ! echo "$POLICY_OUTPUT" | grep -q "Candidate: (none)"; then
+                PHP_VERSION="$version"
+                log "Found PHP ${PHP_VERSION} using policy check"
+                break
+            fi
+        done
+    fi
+    
+    # Final check
+    if [ -z "$PHP_VERSION" ]; then
+        error "No suitable PHP version (8.1+) found in repository"
+        error "Available PHP packages:"
+        apt-cache search --names-only "^php[0-9]" 2>/dev/null | grep -E "^php[0-9]\.[0-9]-cli" | head -10 || true
+        error "Repository status:"
+        apt-cache policy php8.3-cli php8.2-cli php8.1-cli 2>/dev/null | head -20 || true
+        exit 1
     fi
     
     # Install PHP and extensions based on available version
