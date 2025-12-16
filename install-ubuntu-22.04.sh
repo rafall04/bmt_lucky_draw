@@ -1752,8 +1752,16 @@ with open('.env', 'w') as f:
 configure_apache() {
     log "Configuring Apache..."
     
-    read -p "Domain name (or IP): " DOMAIN
+    read -p "Domain name [e.g., bmtnu.raf.my.id]: " DOMAIN
     DOMAIN=${DOMAIN:-localhost}
+    
+    read -p "Server IP address [e.g., 172.17.2.5] (optional, press Enter to skip): " SERVER_IP
+    SERVER_IP=${SERVER_IP:-}
+    
+    # Ask if using HTTPS (for Cloudflare Tunnel or SSL)
+    echo ""
+    read -p "Is this domain using HTTPS? (y/N): " USE_HTTPS
+    USE_HTTPS=${USE_HTTPS:-N}
     
     # Force PHP 8.3 (we installed PHP 8.3 explicitly)
     PHP_VERSION_INSTALLED="8.3"
