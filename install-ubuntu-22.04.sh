@@ -485,6 +485,38 @@ install_php() {
         fi
     done
     
+    # Check opcache separately (it's built-in but needs to be enabled)
+    log "Checking opcache (optional but recommended for production)..."
+    if php -m | grep -qi "^opcache$"; then
+        log "✓ Opcache is enabled"
+    else
+        # Try to enable opcache
+        PHP_INI_DIR=$(php --ini | grep "Scan for additional .ini files" | awk '{print $NF}')
+        if [ -n "$PHP_INI_DIR" ] && [ -d "$PHP_INI_DIR" ]; then
+            OPCACHE_INI="${PHP_INI_DIR}/10-opcache.ini"
+            if [ ! -f "$OPCACHE_INI" ]; then
+                log "Enabling opcache..."
+                sudo tee "$OPCACHE_INI" > /dev/null <<EOF
+; Enable opcache for better performance
+zend_extension=opcache
+opcache.enable=1
+opcache.enable_cli=0
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=10000
+opcache.revalidate_freq=2
+opcache.fast_shutdown=1
+EOF
+                log "✓ Opcache configuration created"
+                warn "⚠ PHP-FPM needs to be restarted for opcache to take effect"
+            else
+                log "✓ Opcache configuration file already exists"
+            fi
+        else
+            warn "⚠ Could not find PHP ini directory, opcache may need manual configuration"
+        fi
+    fi
+    
     if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
         error "Missing PHP extensions: ${MISSING_EXTENSIONS[*]}"
         error "Loaded extensions:"
