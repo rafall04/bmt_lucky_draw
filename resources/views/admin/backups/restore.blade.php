@@ -73,7 +73,7 @@
 
         <!-- Form -->
         <div class="bg-white rounded-xl shadow-lg p-6">
-            <form action="{{ route('admin.backups.restore', $backup) }}" method="POST">
+            <form action="{{ route('admin.backups.restore.store', $backup) }}" method="POST">
                 @csrf
                 
                 <div class="space-y-6">
