@@ -225,7 +225,13 @@ install_php() {
     log "Checking available PHP versions in repository..."
     
     # Get all available PHP versions
+    # Use apt-cache search to find all PHP CLI packages
     ALL_PHP_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | grep -oP "php\K[0-9]\.[0-9]" | sort -V -r | uniq)
+    
+    if [ -z "$ALL_PHP_VERSIONS" ]; then
+        # Alternative: search for php metapackages
+        ALL_PHP_VERSIONS=$(apt-cache search --names-only "^php[0-9]\.[0-9]$" 2>/dev/null | grep -oP "^php\K[0-9]\.[0-9]" | sort -V -r | uniq)
+    fi
     
     log "Available PHP versions found: $ALL_PHP_VERSIONS"
     
@@ -348,20 +354,45 @@ install_php() {
     log "Installing PHP ${PHP_VERSION} packages..."
     
     # Verify packages exist before installing
+    # Use multiple methods for verification since apt-cache policy can be unreliable
     MISSING_PACKAGES=()
     for package in "${PHP_PACKAGES[@]}"; do
-        # Use apt-cache policy which is more reliable
-        if ! apt-cache policy "$package" 2>/dev/null | grep -q "Candidate:" || apt-cache policy "$package" 2>/dev/null | grep -q "Candidate: (none)"; then
+        PACKAGE_AVAILABLE=false
+        
+        # Method 1: Try apt-cache show (most reliable for checking package existence)
+        if apt-cache show "$package" 2>/dev/null | grep -q "^Package:"; then
+            PACKAGE_AVAILABLE=true
+        fi
+        
+        # Method 2: Try apt-cache policy if show didn't work
+        if [ "$PACKAGE_AVAILABLE" = false ]; then
+            POLICY_OUTPUT=$(apt-cache policy "$package" 2>/dev/null)
+            if echo "$POLICY_OUTPUT" | grep -q "Candidate:" && ! echo "$POLICY_OUTPUT" | grep -q "Candidate: (none)"; then
+                CANDIDATE=$(echo "$POLICY_OUTPUT" | grep "Candidate:" | awk '{print $2}')
+                if [ "$CANDIDATE" != "(none)" ] && [ -n "$CANDIDATE" ]; then
+                    PACKAGE_AVAILABLE=true
+                fi
+            fi
+        fi
+        
+        # Method 3: Try apt-cache search as last resort
+        if [ "$PACKAGE_AVAILABLE" = false ]; then
+            if apt-cache search --names-only "^${package}$" 2>/dev/null | grep -q "^${package} "; then
+                PACKAGE_AVAILABLE=true
+            fi
+        fi
+        
+        if [ "$PACKAGE_AVAILABLE" = false ]; then
             MISSING_PACKAGES+=("$package")
         fi
     done
     
     if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
-        error "The following packages are not available: ${MISSING_PACKAGES[*]}"
-        error "Please check repository configuration"
-        error "Trying to search for available PHP packages..."
-        apt-cache search --names-only "^php${PHP_VERSION}" 2>/dev/null | head -10 || true
-        exit 1
+        warn "Some packages failed verification, but will attempt installation anyway..."
+        warn "Missing packages: ${MISSING_PACKAGES[*]}"
+        log "Available PHP ${PHP_VERSION} packages:"
+        apt-cache search --names-only "^php${PHP_VERSION}" 2>/dev/null | head -15 || true
+        log "Attempting to install packages (some may be metapackages)..."
     fi
     
     # Install packages
