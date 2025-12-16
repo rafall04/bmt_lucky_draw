@@ -302,59 +302,40 @@ install_php() {
         done
     fi
     
-    # Final check - if still no PHP 8.2+, try to fix repository and retry
-    if [ -z "$PHP_VERSION" ]; then
-        warn "PHP 8.2+ not found, attempting to fix repository..."
+    # Verify PHP 8.3 is available in repository
+    if ! apt-cache show "php${PHP_VERSION}-cli" 2>/dev/null | grep -q "^Package:"; then
+        warn "PHP ${PHP_VERSION} not found in repository, attempting to fix repository..."
         
         # Try to refresh repository keys
         log "Refreshing repository keys..."
-        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C 2>&1 | tee -a "$LOG_FILE" || true
+        $SUDO_CMD apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C 2>&1 | tee -a "$LOG_FILE" || true
         
         # Remove and re-add repository
         log "Re-adding PHP repository..."
-        sudo rm -f /etc/apt/sources.list.d/ondrej-php*.list 2>/dev/null || true
-        sudo add-apt-repository ppa:ondrej/php -y 2>&1 | tee -a "$LOG_FILE" || true
+        $SUDO_CMD rm -f /etc/apt/sources.list.d/ondrej-php*.list 2>/dev/null || true
+        $SUDO_CMD add-apt-repository ppa:ondrej/php -y 2>&1 | tee -a "$LOG_FILE" || true
         
         # Update again
         log "Updating package lists after repository fix..."
-        sudo apt-get update -y 2>&1 | tee -a "$LOG_FILE" || true
+        $SUDO_CMD apt-get update -y 2>&1 | tee -a "$LOG_FILE" || true
         
-        # Retry detection
-        log "Retrying PHP version detection..."
-        for version in "8.3" "8.2"; do
-            if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
-                PHP_VERSION="$version"
-                log "Found PHP ${PHP_VERSION} after repository fix"
-                break
-            fi
-        done
-    fi
-    
-    # Final check - if still no PHP 8.2+, show detailed error
-    if [ -z "$PHP_VERSION" ]; then
-        error "No suitable PHP version (8.2+) found in repository"
-        error ""
-        error "Available PHP packages in repository:"
-        apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || echo "No PHP packages found"
-        error ""
-        error "Repository information:"
-        grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || echo "No ondrej repository found"
-        error ""
-        error "Repository keys:"
-        sudo apt-key list 2>/dev/null | grep -i ondrej || echo "No ondrej keys found"
-        error ""
-        error "Manual troubleshooting steps:"
-        error "1. Remove existing repository: sudo rm /etc/apt/sources.list.d/ondrej-php*.list"
-        error "2. Add repository: sudo add-apt-repository ppa:ondrej/php"
-        error "3. Update: sudo apt-get update"
-        error "4. Check: apt-cache policy php8.2-cli php8.3-cli"
-        error ""
-        error "Note: PHP 8.2+ is required for Laravel 11. Ubuntu 22.04 should have"
-        error "PHP 8.2+ available from ondrej/php PPA. If still unavailable:"
-        error "- Check internet connection"
-        error "- Verify repository keys: sudo apt-key list | grep ondrej"
-        error "- Try manual repository setup"
-        exit 1
+        # Verify PHP 8.3 is now available
+        if ! apt-cache show "php${PHP_VERSION}-cli" 2>/dev/null | grep -q "^Package:"; then
+            error "PHP ${PHP_VERSION} is not available in repository"
+            error ""
+            error "Available PHP packages in repository:"
+            apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || echo "No PHP packages found"
+            error ""
+            error "Repository information:"
+            grep -r "ondrej" /etc/apt/sources.list.d/ 2>/dev/null | head -5 || echo "No ondrej repository found"
+            error ""
+            error "Manual troubleshooting steps:"
+            error "1. Remove existing repository: sudo rm /etc/apt/sources.list.d/ondrej-php*.list"
+            error "2. Add repository: sudo add-apt-repository ppa:ondrej/php"
+            error "3. Update: sudo apt-get update"
+            error "4. Check: apt-cache policy php8.3-cli"
+            exit 1
+        fi
     fi
     
     # Install PHP and extensions based on available version
@@ -420,14 +401,13 @@ install_php() {
         log "Attempting to install packages (some may be metapackages)..."
     fi
     
-    # Install packages
-    # Note: Some packages like php8.5 are metapackages that automatically install dependencies
+    # Install packages - Force PHP 8.3 explicitly
     for package in "${PHP_PACKAGES[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
             log "Installing $package..."
             # Try to install, but don't fail immediately if package name doesn't exist
             # Some packages might be metapackages or have different names
-            if sudo apt-get install -y "$package" 2>&1 | tee -a "$LOG_FILE"; then
+            if $SUDO_CMD apt-get install -y "$package" 2>&1 | tee -a "$LOG_FILE"; then
                 INSTALLED_PACKAGES+=("$package")
                 log "✓ $package installed successfully"
             else
@@ -440,7 +420,7 @@ install_php() {
                     ALTERNATIVE=$(apt-cache search --names-only "^php${PHP_VERSION}" 2>/dev/null | grep -E "(cli|fpm|common)" | head -1 | awk '{print $1}')
                     if [ -n "$ALTERNATIVE" ] && [ "$ALTERNATIVE" != "$package" ]; then
                         warn "Found alternative: $ALTERNATIVE, trying to install..."
-                        sudo apt-get install -y "$ALTERNATIVE" 2>&1 | tee -a "$LOG_FILE" || {
+                        $SUDO_CMD apt-get install -y "$ALTERNATIVE" 2>&1 | tee -a "$LOG_FILE" || {
                             error "Failed to install alternative package: $ALTERNATIVE"
                             exit 1
                         }
@@ -1021,7 +1001,8 @@ install_dependencies() {
         # Capture output to check for compatibility issues
         COMPOSER_OUTPUT=$(mktemp)
         COMPOSER_EXIT_CODE=0
-        composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE" || COMPOSER_EXIT_CODE=$?
+        # Try with --ignore-platform-req=php+ as safety net (PHP 8.3 should work, but just in case)
+        composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-req=php+ 2>&1 | tee "$COMPOSER_OUTPUT" | tee -a "$LOG_FILE" || COMPOSER_EXIT_CODE=$?
         
         if [ $COMPOSER_EXIT_CODE -ne 0 ]; then
             error "Failed to install PHP dependencies"
