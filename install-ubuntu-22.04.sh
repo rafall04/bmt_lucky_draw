@@ -529,6 +529,16 @@ install_php() {
         
         if [ -n "$PHP_INI_DIR" ] && [ -d "$PHP_INI_DIR" ]; then
             OPCACHE_INI="${PHP_INI_DIR}/10-opcache.ini"
+            
+            # Check if opcache config exists and has problematic zend_extension
+            if [ -f "$OPCACHE_INI" ]; then
+                # Check if it has zend_extension=opcache without full path (problematic)
+                if grep -q "^zend_extension=opcache$" "$OPCACHE_INI" 2>/dev/null; then
+                    log "Found problematic opcache config, fixing it..."
+                    sudo rm -f "$OPCACHE_INI"
+                fi
+            fi
+            
             if [ ! -f "$OPCACHE_INI" ]; then
                 log "Enabling opcache in $OPCACHE_INI..."
                 
@@ -572,23 +582,10 @@ EOF
                     if php -m 2>/dev/null | grep -qi opcache; then
                         log "✓ Opcache is already enabled (built-in)"
                     else
-                        # Try to enable opcache without zend_extension (for PHP 8.0+ built-in opcache)
-                        log "Opcache.so not found, trying to enable built-in opcache..."
-                        sudo tee "$OPCACHE_INI" > /dev/null <<EOF
-; Enable opcache for better performance
-; Note: For PHP 8.0+, opcache may be built-in and enabled via php.ini
-; If this doesn't work, opcache may need to be enabled in main php.ini file
-opcache.enable=1
-opcache.enable_cli=0
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.revalidate_freq=2
-opcache.fast_shutdown=1
-EOF
-                        log "✓ Opcache configuration created (without zend_extension)"
-                        warn "⚠ If opcache still doesn't work, you may need to enable it in main php.ini"
-                        warn "⚠ Or opcache may not be available for this PHP installation"
+                        # Don't create config if opcache.so not found - it will cause warnings
+                        log "⚠ Opcache.so not found, skipping opcache configuration"
+                        log "⚠ Opcache may be built-in and enabled in main php.ini"
+                        warn "⚠ You can manually enable opcache in /etc/php/${PHP_VERSION}/fpm/php.ini if needed"
                     fi
                 fi
             else
@@ -970,30 +967,72 @@ install_dependencies() {
             exit 1
         fi
         
+        # Check if composer.lock exists and if it's compatible with current PHP version
+        if [ -f "composer.lock" ]; then
+            PHP_MAJOR=$(php -r 'echo PHP_MAJOR_VERSION;')
+            PHP_MINOR=$(php -r 'echo PHP_MINOR_VERSION;')
+            log "Detected PHP version: ${PHP_MAJOR}.${PHP_MINOR}"
+            
+            # Check if lock file might be incompatible (PHP 8.5+ may have issues with old packages)
+            if [ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -ge 5 ]; then
+                log "PHP 8.5+ detected, checking lock file compatibility..."
+                # Try to validate lock file
+                if ! composer validate --no-check-publish 2>/dev/null | grep -q "is valid"; then
+                    warn "Lock file may be incompatible, will try to update if needed"
+                fi
+            fi
+        fi
+        
         # Install dependencies - use current user, not www-data (permissions will be fixed later)
         log "Running composer install..."
         composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
             error "Failed to install PHP dependencies"
-            log "Checking for cache path issues..."
+            log "Checking for compatibility issues..."
             
-            # Double-check directories exist
-            mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
-            chmod -R 775 bootstrap/cache storage
-            
-            # Try with --ignore-platform-reqs and --no-scripts to skip post-install scripts
-            log "Trying with --ignore-platform-reqs and --no-scripts..."
-            composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | tee -a "$LOG_FILE" || {
-                error "Composer install failed even with --ignore-platform-reqs --no-scripts"
-                error "Please check the error messages above"
-                exit 1
-            }
-            
-            # Run package discovery manually after install (with proper cache path)
-            log "Running package discovery manually..."
-            php artisan package:discover --ansi 2>&1 | tee -a "$LOG_FILE" || {
-                warn "Package discovery failed, but continuing..."
-                warn "You may need to run 'php artisan package:discover' manually later"
-            }
+            # Check if it's a lock file compatibility issue
+            if grep -q "does not satisfy that requirement" "$LOG_FILE" 2>/dev/null || \
+               grep -q "Your lock file does not contain a compatible set" "$LOG_FILE" 2>/dev/null; then
+                warn "Lock file compatibility issue detected"
+                log "Updating composer dependencies to resolve compatibility..."
+                
+                # Update composer dependencies to fix lock file
+                composer update --no-dev --no-interaction --with-all-dependencies 2>&1 | tee -a "$LOG_FILE" || {
+                    warn "Composer update failed, trying with --ignore-platform-reqs..."
+                    composer update --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE" || {
+                        error "Failed to update dependencies"
+                        exit 1
+                    }
+                }
+                
+                # Now try install again
+                log "Installing updated dependencies..."
+                composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
+                    error "Failed to install after update"
+                    exit 1
+                }
+            else
+                # Other error - try with --ignore-platform-reqs
+                log "Checking for cache path issues..."
+                
+                # Double-check directories exist
+                mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+                chmod -R 775 bootstrap/cache storage
+                
+                # Try with --ignore-platform-reqs and --no-scripts to skip post-install scripts
+                log "Trying with --ignore-platform-reqs and --no-scripts..."
+                composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | tee -a "$LOG_FILE" || {
+                    error "Composer install failed even with --ignore-platform-reqs --no-scripts"
+                    error "Please check the error messages above"
+                    exit 1
+                }
+                
+                # Run package discovery manually after install (with proper cache path)
+                log "Running package discovery manually..."
+                php artisan package:discover --ansi 2>&1 | tee -a "$LOG_FILE" || {
+                    warn "Package discovery failed, but continuing..."
+                    warn "You may need to run 'php artisan package:discover' manually later"
+                }
+            fi
         }
         log "✓ PHP dependencies installed"
     else
@@ -1004,7 +1043,9 @@ install_dependencies() {
     # Install NPM dependencies
     log "Installing NPM dependencies..."
     if [ -f "package.json" ]; then
-        npm install --production 2>&1 | tee -a "$LOG_FILE" || {
+        # Install ALL dependencies (including dev) because vite is needed for build
+        log "Installing NPM dependencies (including dev dependencies for build tools)..."
+        npm install 2>&1 | tee -a "$LOG_FILE" || {
             error "Failed to install NPM dependencies"
             exit 1
         }
@@ -1013,6 +1054,7 @@ install_dependencies() {
         log "Building assets..."
         npm run build 2>&1 | tee -a "$LOG_FILE" || {
             error "Failed to build assets"
+            error "Make sure vite is installed: npm install"
             exit 1
         }
         log "✓ Assets built successfully"
