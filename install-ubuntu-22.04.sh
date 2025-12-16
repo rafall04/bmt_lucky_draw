@@ -566,12 +566,18 @@ opcache.revalidate_freq=2
 opcache.fast_shutdown=1
 EOF
                     log "✓ Opcache configuration created at $OPCACHE_INI"
+                    warn "⚠ PHP-FPM needs to be restarted for opcache to take effect"
                 else
-                    # Try without full path - let PHP find it
-                    log "Opcache.so not found, trying with extension name only..."
-                    sudo tee "$OPCACHE_INI" > /dev/null <<EOF
+                    # Opcache.so not found - check if opcache is already enabled in php.ini
+                    if php -m 2>/dev/null | grep -qi opcache; then
+                        log "✓ Opcache is already enabled (built-in)"
+                    else
+                        # Try to enable opcache without zend_extension (for PHP 8.0+ built-in opcache)
+                        log "Opcache.so not found, trying to enable built-in opcache..."
+                        sudo tee "$OPCACHE_INI" > /dev/null <<EOF
 ; Enable opcache for better performance
-; Note: Opcache is built-in for PHP 8.0+, may not need zend_extension
+; Note: For PHP 8.0+, opcache may be built-in and enabled via php.ini
+; If this doesn't work, opcache may need to be enabled in main php.ini file
 opcache.enable=1
 opcache.enable_cli=0
 opcache.memory_consumption=128
@@ -580,10 +586,11 @@ opcache.max_accelerated_files=10000
 opcache.revalidate_freq=2
 opcache.fast_shutdown=1
 EOF
-                    log "✓ Opcache configuration created (without zend_extension)"
-                    warn "⚠ If opcache still doesn't work, check php.ini for opcache settings"
+                        log "✓ Opcache configuration created (without zend_extension)"
+                        warn "⚠ If opcache still doesn't work, you may need to enable it in main php.ini"
+                        warn "⚠ Or opcache may not be available for this PHP installation"
+                    fi
                 fi
-                warn "⚠ PHP-FPM needs to be restarted for opcache to take effect"
             else
                 log "✓ Opcache configuration file already exists at $OPCACHE_INI"
             fi
@@ -937,6 +944,22 @@ install_dependencies() {
         exit 1
     }
     
+    # CRITICAL: Create and prepare Laravel directories BEFORE composer install
+    # This prevents "Please provide a valid cache path" errors
+    log "Preparing Laravel directories..."
+    mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null || true
+    
+    # Set permissions (use current user for now, will fix ownership later)
+    chmod -R 775 bootstrap/cache storage 2>/dev/null || true
+    
+    # Create .gitkeep files to ensure directories exist
+    touch bootstrap/cache/.gitkeep storage/framework/cache/.gitkeep storage/framework/sessions/.gitkeep storage/framework/views/.gitkeep storage/logs/.gitkeep 2>/dev/null || true
+    
+    # Clear any existing problematic cache files
+    rm -f bootstrap/cache/*.php 2>/dev/null || true
+    
+    log "✓ Laravel directories prepared"
+    
     # Install PHP dependencies
     log "Installing PHP dependencies with Composer..."
     if [ -f "composer.json" ]; then
@@ -951,10 +974,25 @@ install_dependencies() {
         log "Running composer install..."
         composer install --optimize-autoloader --no-dev --no-interaction 2>&1 | tee -a "$LOG_FILE" || {
             error "Failed to install PHP dependencies"
-            error "Trying with --ignore-platform-reqs flag..."
-            composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs 2>&1 | tee -a "$LOG_FILE" || {
-                error "Composer install failed even with --ignore-platform-reqs"
+            log "Checking for cache path issues..."
+            
+            # Double-check directories exist
+            mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+            chmod -R 775 bootstrap/cache storage
+            
+            # Try with --ignore-platform-reqs and --no-scripts to skip post-install scripts
+            log "Trying with --ignore-platform-reqs and --no-scripts..."
+            composer install --optimize-autoloader --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | tee -a "$LOG_FILE" || {
+                error "Composer install failed even with --ignore-platform-reqs --no-scripts"
+                error "Please check the error messages above"
                 exit 1
+            }
+            
+            # Run package discovery manually after install (with proper cache path)
+            log "Running package discovery manually..."
+            php artisan package:discover --ansi 2>&1 | tee -a "$LOG_FILE" || {
+                warn "Package discovery failed, but continuing..."
+                warn "You may need to run 'php artisan package:discover' manually later"
             }
         }
         log "✓ PHP dependencies installed"
@@ -1026,6 +1064,10 @@ EOF
     else
         log "✓ .env file already exists"
     fi
+    
+    # Ensure bootstrap/cache exists before generating key
+    mkdir -p bootstrap/cache
+    chmod 775 bootstrap/cache
     
     # Generate APP_KEY if not set
     if ! grep -q "APP_KEY=base64:" .env; then
