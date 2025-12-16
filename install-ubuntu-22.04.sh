@@ -1542,10 +1542,20 @@ configure_nginx() {
     NGINX_CONFIG="/etc/nginx/sites-available/bmt_lucky_draw"
     
     log "Creating Nginx configuration for PHP ${PHP_VERSION_INSTALLED}..."
+    
+    # Build server_name list (domain + IP if provided)
+    if [ -n "$SERVER_IP" ]; then
+        SERVER_NAMES="${DOMAIN} ${SERVER_IP}"
+        log "✓ Configuring for domain: $DOMAIN and IP: $SERVER_IP"
+    else
+        SERVER_NAMES="${DOMAIN}"
+        log "✓ Configuring for domain: $DOMAIN"
+    fi
+    
     $SUDO_CMD tee "$NGINX_CONFIG" > /dev/null <<EOF
 server {
     listen 80;
-    server_name ${DOMAIN};
+    server_name ${SERVER_NAMES};
     root ${PROJECT_DIR}/public;
 
     add_header X-Frame-Options "SAMEORIGIN";
@@ -1603,16 +1613,21 @@ EOF
         }
     fi
     
-    log "✓ Nginx configured for $DOMAIN"
+    if [ -n "$SERVER_IP" ]; then
+        log "✓ Nginx configured for $DOMAIN and $SERVER_IP"
+    else
+        log "✓ Nginx configured for $DOMAIN"
+    fi
     log "✓ PHP-FPM 8.3 is running and connected"
     
     # Update .env with correct APP_URL and HTTPS settings
-    update_production_env "$DOMAIN" "$USE_HTTPS"
+    update_production_env "$DOMAIN" "$USE_HTTPS" "$SERVER_IP"
 }
 
 update_production_env() {
     local DOMAIN=$1
     local USE_HTTPS=$2
+    local SERVER_IP=$3
     
     if [ -z "$DOMAIN" ]; then
         return 0
@@ -1622,15 +1637,26 @@ update_production_env() {
     
     log "Updating .env for production configuration..."
     
-    # Determine APP_URL based on HTTPS
+    # Determine APP_URL based on HTTPS (always use domain for APP_URL)
     if [ "$USE_HTTPS" = "y" ] || [ "$USE_HTTPS" = "Y" ]; then
         APP_URL="https://${DOMAIN}"
         SESSION_SECURE="true"
         log "✓ Configured for HTTPS: $APP_URL"
     else
         APP_URL="http://${DOMAIN}"
+        # If IP is provided and domain uses HTTP, set SESSION_SECURE to false
+        # because IP access will be HTTP (not HTTPS)
         SESSION_SECURE="false"
         log "✓ Configured for HTTP: $APP_URL"
+    fi
+    
+    # If IP is provided, log that both access methods are supported
+    if [ -n "$SERVER_IP" ]; then
+        if [ "$USE_HTTPS" = "y" ] || [ "$USE_HTTPS" = "Y" ]; then
+            log "✓ Application accessible via: https://${DOMAIN} and http://${SERVER_IP}"
+        else
+            log "✓ Application accessible via: http://${DOMAIN} and http://${SERVER_IP}"
+        fi
     fi
     
     # Update APP_URL in .env
@@ -1667,7 +1693,10 @@ with open('.env', 'w') as f:
     fi
     
     # Update SESSION_SECURE_COOKIE for HTTPS
-    if [ "$SESSION_SECURE" = "true" ]; then
+    # If IP is provided, we need to support both HTTPS (domain) and HTTP (IP)
+    # So SESSION_SECURE_COOKIE should be false to allow HTTP access via IP
+    if [ "$SESSION_SECURE" = "true" ] && [ -z "$SERVER_IP" ]; then
+        # Only set secure cookie if no IP access (pure HTTPS)
         if grep -q "^SESSION_SECURE_COOKIE=" .env; then
             if command -v sed &>/dev/null; then
                 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -1680,6 +1709,36 @@ with open('.env', 'w') as f:
             echo "SESSION_SECURE_COOKIE=true" >> .env
         fi
         log "✓ Set SESSION_SECURE_COOKIE=true for HTTPS"
+    elif [ -n "$SERVER_IP" ]; then
+        # If IP is provided, set to false to allow HTTP access via IP
+        if grep -q "^SESSION_SECURE_COOKIE=" .env; then
+            if command -v sed &>/dev/null; then
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
+                else
+                    sed -i "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=false|" .env
+                fi
+            fi
+        else
+            echo "SESSION_SECURE_COOKIE=false" >> .env
+        fi
+        log "✓ Set SESSION_SECURE_COOKIE=false to support IP access (HTTP)"
+    fi
+    
+    # Set SESSION_DOMAIN to empty to allow cookies for both domain and IP
+    if [ -n "$SERVER_IP" ]; then
+        if grep -q "^SESSION_DOMAIN=" .env; then
+            if command -v sed &>/dev/null; then
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' "s|^SESSION_DOMAIN=.*|SESSION_DOMAIN=|" .env
+                else
+                    sed -i "s|^SESSION_DOMAIN=.*|SESSION_DOMAIN=|" .env
+                fi
+            fi
+        else
+            echo "SESSION_DOMAIN=" >> .env
+        fi
+        log "✓ Set SESSION_DOMAIN empty to support both domain and IP access"
     fi
     
     # Clear config cache to apply changes
@@ -1770,11 +1829,15 @@ EOF
         }
     fi
     
-    log "✓ Apache configured for $DOMAIN"
+    if [ -n "$SERVER_IP" ]; then
+        log "✓ Apache configured for $DOMAIN and $SERVER_IP"
+    else
+        log "✓ Apache configured for $DOMAIN"
+    fi
     log "✓ PHP-FPM 8.3 is running and connected"
     
     # Update .env with correct APP_URL and HTTPS settings
-    update_production_env "$DOMAIN" "$USE_HTTPS"
+    update_production_env "$DOMAIN" "$USE_HTTPS" "$SERVER_IP"
 }
 
 ###############################################################################
