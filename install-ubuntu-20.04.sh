@@ -163,8 +163,17 @@ update_system() {
 install_php() {
     step "Installing PHP 8.3 and Extensions"
     
-    # Add PHP repository
-    if ! check_command php8.3; then
+    # Install software-properties-common if not installed (required for add-apt-repository)
+    if ! dpkg -l | grep -q "^ii  software-properties-common "; then
+        log "Installing software-properties-common..."
+        sudo apt-get install -y software-properties-common | tee -a "$LOG_FILE" || {
+            error "Failed to install software-properties-common"
+            exit 1
+        }
+    fi
+    
+    # Check if PHP repository is already added
+    if ! grep -q "^deb.*ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
         log "Adding PHP repository..."
         sudo add-apt-repository ppa:ondrej/php -y | tee -a "$LOG_FILE" || {
             error "Failed to add PHP repository"
@@ -177,31 +186,70 @@ install_php() {
             error "Failed to update after adding PHP repo"
             exit 1
         }
+    else
+        log "PHP repository already added, updating package lists..."
+        sudo apt-get update -y | tee -a "$LOG_FILE" || {
+            error "Failed to update package lists"
+            exit 1
+        }
     fi
     
-    # Install PHP and extensions
+    # Check which PHP version is available
+    PHP_VERSION=""
+    if apt-cache show php8.3-cli &>/dev/null; then
+        PHP_VERSION="8.3"
+        log "PHP 8.3 is available in repository"
+    elif apt-cache show php8.2-cli &>/dev/null; then
+        PHP_VERSION="8.2"
+        warn "PHP 8.3 not available, using PHP 8.2 instead"
+    elif apt-cache show php8.1-cli &>/dev/null; then
+        PHP_VERSION="8.1"
+        warn "PHP 8.3 not available, using PHP 8.1 instead"
+    else
+        error "No suitable PHP version (8.1+) found in repository"
+        exit 1
+    fi
+    
+    # Install PHP and extensions based on available version
     PHP_PACKAGES=(
-        "php8.3"
-        "php8.3-cli"
-        "php8.3-fpm"
-        "php8.3-common"
-        "php8.3-mysql"
-        "php8.3-zip"
-        "php8.3-gd"
-        "php8.3-mbstring"
-        "php8.3-curl"
-        "php8.3-xml"
-        "php8.3-bcmath"
-        "php8.3-intl"
-        "php8.3-readline"
-        "php8.3-tokenizer"
-        "php8.3-json"
-        "php8.3-opcache"
+        "php${PHP_VERSION}"
+        "php${PHP_VERSION}-cli"
+        "php${PHP_VERSION}-fpm"
+        "php${PHP_VERSION}-common"
+        "php${PHP_VERSION}-mysql"
+        "php${PHP_VERSION}-zip"
+        "php${PHP_VERSION}-gd"
+        "php${PHP_VERSION}-mbstring"
+        "php${PHP_VERSION}-curl"
+        "php${PHP_VERSION}-xml"
+        "php${PHP_VERSION}-bcmath"
+        "php${PHP_VERSION}-intl"
+        "php${PHP_VERSION}-readline"
+        "php${PHP_VERSION}-tokenizer"
+        "php${PHP_VERSION}-json"
+        "php${PHP_VERSION}-opcache"
     )
     
-    log "Installing PHP packages..."
+    log "Installing PHP ${PHP_VERSION} packages..."
+    
+    # Verify packages exist before installing
+    MISSING_PACKAGES=()
+    for package in "${PHP_PACKAGES[@]}"; do
+        if ! apt-cache show "$package" &>/dev/null; then
+            MISSING_PACKAGES+=("$package")
+        fi
+    done
+    
+    if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+        error "The following packages are not available: ${MISSING_PACKAGES[*]}"
+        error "Please check repository configuration"
+        exit 1
+    fi
+    
+    # Install packages
     for package in "${PHP_PACKAGES[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
+            log "Installing $package..."
             sudo apt-get install -y "$package" | tee -a "$LOG_FILE" || {
                 error "Failed to install $package"
                 exit 1
@@ -217,8 +265,15 @@ install_php() {
         exit 1
     fi
     
-    PHP_VERSION=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
-    log "✓ PHP $PHP_VERSION installed successfully"
+    # Verify PHP is accessible
+    if command -v php &>/dev/null; then
+        INSTALLED_PHP_VERSION=$(php -v | head -n 1 | cut -d " " -f 2 | cut -c 1-3)
+        log "✓ PHP $INSTALLED_PHP_VERSION installed successfully"
+        export PHP_VERSION_INSTALLED="$INSTALLED_PHP_VERSION"
+    else
+        error "PHP command not found after installation"
+        exit 1
+    fi
     
     # Verify required extensions
     REQUIRED_EXTENSIONS=("mysql" "zip" "gd" "mbstring" "curl" "xml" "bcmath" "intl")
@@ -236,6 +291,9 @@ install_php() {
     fi
     
     log "✓ All required PHP extensions installed"
+    
+    # Store PHP version for later use
+    export PHP_VERSION_INSTALLED="$PHP_VERSION"
 }
 
 ###############################################################################
