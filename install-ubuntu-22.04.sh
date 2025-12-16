@@ -1504,8 +1504,16 @@ configure_webserver() {
 configure_nginx() {
     log "Configuring Nginx..."
     
-    read -p "Domain name (or IP): " DOMAIN
+    read -p "Domain name [e.g., bmtnu.raf.my.id]: " DOMAIN
     DOMAIN=${DOMAIN:-localhost}
+    
+    read -p "Server IP address [e.g., 172.17.2.5] (optional, press Enter to skip): " SERVER_IP
+    SERVER_IP=${SERVER_IP:-}
+    
+    # Ask if using HTTPS (for Cloudflare Tunnel or SSL)
+    echo ""
+    read -p "Is this domain using HTTPS? (y/N): " USE_HTTPS
+    USE_HTTPS=${USE_HTTPS:-N}
     
     # Force PHP 8.3 (we installed PHP 8.3 explicitly)
     PHP_VERSION_INSTALLED="8.3"
@@ -1552,7 +1560,10 @@ configure_nginx() {
         log "✓ Configuring for domain: $DOMAIN"
     fi
     
-    $SUDO_CMD tee "$NGINX_CONFIG" > /dev/null <<EOF
+    # Create Nginx configuration file using a temporary file first
+    # This is more reliable than using heredoc with sudo tee directly
+    NGINX_CONFIG_TMP=$(mktemp)
+    cat > "$NGINX_CONFIG_TMP" <<EOF
 server {
     listen 80;
     server_name ${SERVER_NAMES};
@@ -1587,6 +1598,22 @@ server {
     }
 }
 EOF
+    
+    # Copy temp file to actual config location with sudo
+    $SUDO_CMD cp "$NGINX_CONFIG_TMP" "$NGINX_CONFIG" || {
+        error "Failed to create Nginx configuration file"
+        rm -f "$NGINX_CONFIG_TMP"
+        exit 1
+    }
+    rm -f "$NGINX_CONFIG_TMP"
+    
+    # Verify file was created and has content
+    if [ ! -s "$NGINX_CONFIG" ]; then
+        error "Nginx configuration file is empty or was not created"
+        exit 1
+    fi
+    
+    log "✓ Nginx configuration file created successfully"
     
     # Enable site
     $SUDO_CMD ln -sf "$NGINX_CONFIG" /etc/nginx/sites-enabled/bmt_lucky_draw || true
