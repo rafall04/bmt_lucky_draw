@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ###############################################################################
-# BMT Lucky Draw System - Installation Script for Ubuntu 20.04
+# BMT Lucky Draw System - Installation Script for Ubuntu 22.04
 # Anti-Gagal dengan Error Handling, Verification, dan Rollback
 ###############################################################################
 
@@ -107,8 +107,8 @@ pre_checks() {
     # Check Ubuntu version
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        if [ "$ID" != "ubuntu" ] || [ "$VERSION_ID" != "20.04" ]; then
-            warn "This script is designed for Ubuntu 20.04"
+        if [ "$ID" != "ubuntu" ] || [ "$VERSION_ID" != "22.04" ]; then
+            warn "This script is designed for Ubuntu 22.04 LTS"
             warn "Detected: $ID $VERSION_ID"
             read -p "Continue anyway? (y/N): " -n 1 -r
             echo
@@ -161,7 +161,7 @@ update_system() {
 ###############################################################################
 
 install_php() {
-    step "Installing PHP 8.3 and Extensions"
+    step "Installing PHP 8.2+ and Extensions"
     
     # Install software-properties-common if not installed (required for add-apt-repository)
     if ! dpkg -l | grep -q "^ii  software-properties-common "; then
@@ -183,7 +183,7 @@ install_php() {
             error "Failed to add PHP repository"
             error "Trying alternative method..."
             # Alternative: Add repository manually
-            echo "deb http://ppa.launchpad.net/ondrej/php/ubuntu focal main" | sudo tee /etc/apt/sources.list.d/ondrej-php.list
+            echo "deb http://ppa.launchpad.net/ondrej/php/ubuntu jammy main" | sudo tee /etc/apt/sources.list.d/ondrej-php.list
             sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4F4EA0AAE5267A6C || true
             INSTALLED_REPOS+=("ppa:ondrej/php")
         }
@@ -203,8 +203,8 @@ install_php() {
         }
     }
     
-    # Verify repository is working and has PHP 8.1+ packages
-    log "Verifying PHP repository and checking for PHP 8.1+ packages..."
+    # Verify repository is working and has PHP 8.2+ packages
+    log "Verifying PHP repository and checking for PHP 8.2+ packages..."
     REPO_WORKING=false
     
     # Check if we can see PHP packages from ondrej repository
@@ -242,10 +242,10 @@ install_php() {
         done
     fi
     
-    # Method 2: Try direct install test for each version
+    # Method 2: Try direct install test for each version (prioritize 8.2+)
     if [ -z "$PHP_VERSION" ]; then
         log "Trying direct package availability check..."
-        for version in "8.3" "8.2" "8.1"; do
+        for version in "8.3" "8.2"; do
             if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
                 PHP_VERSION="$version"
                 log "Found PHP ${PHP_VERSION} using direct package check"
@@ -254,10 +254,10 @@ install_php() {
         done
     fi
     
-    # Method 3: Try policy check
+    # Method 3: Try policy check (prioritize 8.2+)
     if [ -z "$PHP_VERSION" ]; then
         log "Trying policy check method..."
-        for version in "8.3" "8.2" "8.1"; do
+        for version in "8.3" "8.2"; do
             POLICY_OUTPUT=$(apt-cache policy "php${version}-cli" 2>/dev/null)
             if echo "$POLICY_OUTPUT" | grep -q "Candidate:" && ! echo "$POLICY_OUTPUT" | grep -q "Candidate: (none)"; then
                 CANDIDATE=$(echo "$POLICY_OUTPUT" | grep "Candidate:" | awk '{print $2}')
@@ -270,9 +270,9 @@ install_php() {
         done
     fi
     
-    # Final check - if still no PHP 8.1+, try to fix repository and retry
+    # Final check - if still no PHP 8.2+, try to fix repository and retry
     if [ -z "$PHP_VERSION" ]; then
-        warn "PHP 8.1+ not found, attempting to fix repository..."
+        warn "PHP 8.2+ not found, attempting to fix repository..."
         
         # Try to refresh repository keys
         log "Refreshing repository keys..."
@@ -289,7 +289,7 @@ install_php() {
         
         # Retry detection
         log "Retrying PHP version detection..."
-        for version in "8.3" "8.2" "8.1"; do
+        for version in "8.3" "8.2"; do
             if apt-cache show "php${version}-cli" 2>/dev/null | grep -q "^Package:"; then
                 PHP_VERSION="$version"
                 log "Found PHP ${PHP_VERSION} after repository fix"
@@ -298,9 +298,9 @@ install_php() {
         done
     fi
     
-    # Final check - if still no PHP 8.1+, show detailed error
+    # Final check - if still no PHP 8.2+, show detailed error
     if [ -z "$PHP_VERSION" ]; then
-        error "No suitable PHP version (8.1+) found in repository"
+        error "No suitable PHP version (8.2+) found in repository"
         error ""
         error "Available PHP packages in repository:"
         apt-cache search --names-only "^php[0-9]\.[0-9]-cli$" 2>/dev/null | head -10 || echo "No PHP packages found"
@@ -315,11 +315,13 @@ install_php() {
         error "1. Remove existing repository: sudo rm /etc/apt/sources.list.d/ondrej-php*.list"
         error "2. Add repository: sudo add-apt-repository ppa:ondrej/php"
         error "3. Update: sudo apt-get update"
-        error "4. Check: apt-cache policy php8.1-cli php8.2-cli php8.3-cli"
+        error "4. Check: apt-cache policy php8.2-cli php8.3-cli"
         error ""
-        error "Note: PHP 8.1+ is required for Laravel 11. If unavailable, consider:"
-        error "- Upgrading to Ubuntu 22.04 LTS (recommended)"
-        error "- Using a different PHP installation method"
+        error "Note: PHP 8.2+ is required for Laravel 11. Ubuntu 22.04 should have"
+        error "PHP 8.2+ available from ondrej/php PPA. If still unavailable:"
+        error "- Check internet connection"
+        error "- Verify repository keys: sudo apt-key list | grep ondrej"
+        error "- Try manual repository setup"
         exit 1
     fi
     
@@ -1043,7 +1045,7 @@ main() {
     clear
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║  BMT Lucky Draw System - Ubuntu 20.04 Installation Script  ║"
+    echo "║  BMT Lucky Draw System - Ubuntu 22.04 Installation Script  ║"
     echo "║              Anti-Gagal dengan Error Handling             ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}\n"
