@@ -1435,12 +1435,62 @@ setup_permissions() {
 configure_webserver() {
     step "Configuring Web Server"
     
+    # Detect which web server is running or should be used
+    NGINX_ACTIVE=false
+    APACHE_ACTIVE=false
+    
     if systemctl is-active --quiet nginx; then
+        NGINX_ACTIVE=true
+        log "Nginx is currently running"
+    fi
+    
+    if systemctl is-active --quiet apache2; then
+        APACHE_ACTIVE=true
+        log "Apache is currently running"
+    fi
+    
+    # If both are running, ask user which one to use
+    if [ "$NGINX_ACTIVE" = true ] && [ "$APACHE_ACTIVE" = true ]; then
+        warn "Both Nginx and Apache are running! This will cause port conflicts."
+        echo ""
+        echo "Which web server do you want to use?"
+        echo "1) Nginx (recommended)"
+        echo "2) Apache"
+        read -p "Enter choice [1]: " WS_CHOICE
+        WS_CHOICE=${WS_CHOICE:-1}
+        
+        if [ "$WS_CHOICE" = "1" ]; then
+            log "Stopping Apache to avoid port conflicts..."
+            $SUDO_CMD systemctl stop apache2 || true
+            $SUDO_CMD systemctl disable apache2 || true
+            APACHE_ACTIVE=false
+            configure_nginx
+        else
+            log "Stopping Nginx to avoid port conflicts..."
+            $SUDO_CMD systemctl stop nginx || true
+            $SUDO_CMD systemctl disable nginx || true
+            NGINX_ACTIVE=false
+            configure_apache
+        fi
+    elif [ "$NGINX_ACTIVE" = true ]; then
+        # Ensure Apache is stopped
+        if systemctl is-installed --quiet apache2 2>/dev/null; then
+            log "Stopping Apache to avoid conflicts..."
+            $SUDO_CMD systemctl stop apache2 || true
+            $SUDO_CMD systemctl disable apache2 || true
+        fi
         configure_nginx
-    elif systemctl is-active --quiet apache2; then
+    elif [ "$APACHE_ACTIVE" = true ]; then
+        # Ensure Nginx is stopped
+        if systemctl is-installed --quiet nginx 2>/dev/null; then
+            log "Stopping Nginx to avoid conflicts..."
+            $SUDO_CMD systemctl stop nginx || true
+            $SUDO_CMD systemctl disable nginx || true
+        fi
         configure_apache
     else
         warn "No web server detected, skipping configuration"
+        warn "Please install and start Nginx or Apache first"
     fi
 }
 
@@ -1548,6 +1598,9 @@ EOF
     
     log "✓ Nginx configured for $DOMAIN"
     log "✓ PHP-FPM 8.3 is running and connected"
+    
+    # Update .env with correct APP_URL and HTTPS settings
+    update_production_env "$DOMAIN" "$USE_HTTPS"
 }
 
 configure_apache() {
@@ -1632,6 +1685,9 @@ EOF
     
     log "✓ Apache configured for $DOMAIN"
     log "✓ PHP-FPM 8.3 is running and connected"
+    
+    # Update .env with correct APP_URL and HTTPS settings
+    update_production_env "$DOMAIN" "$USE_HTTPS"
 }
 
 ###############################################################################
