@@ -1216,10 +1216,10 @@ main() {
     install_webserver
     setup_project
     install_dependencies
+    configure_webserver  # Must be before setup_environment to set domain/IP vars
     setup_environment
     setup_database
     setup_permissions
-    configure_webserver
     final_verification
     
     # Success message
