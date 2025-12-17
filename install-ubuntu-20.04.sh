@@ -700,6 +700,29 @@ setup_environment() {
     
     cd "$PROJECT_DIR" || exit 1
     
+    # Determine APP_URL based on domain or IP
+    APP_URL_VALUE="http://localhost"
+    SESSION_SECURE_COOKIE_VALUE="false"
+    
+    if [ -n "${NGINX_DOMAIN:-}" ] || [ -n "${APACHE_DOMAIN:-}" ]; then
+        DOMAIN_TO_USE="${NGINX_DOMAIN:-${APACHE_DOMAIN:-}}"
+        # Check if domain should use HTTPS (common practice for production domains)
+        read -p "Use HTTPS for domain $DOMAIN_TO_USE? (y/N): " -n 1 -r USE_HTTPS
+        echo
+        if [[ $USE_HTTPS =~ ^[Yy]$ ]]; then
+            APP_URL_VALUE="https://${DOMAIN_TO_USE}"
+            SESSION_SECURE_COOKIE_VALUE="true"
+            log "✓ Configured for HTTPS: $APP_URL_VALUE"
+        else
+            APP_URL_VALUE="http://${DOMAIN_TO_USE}"
+            log "✓ Configured for HTTP: $APP_URL_VALUE"
+        fi
+    elif [ -n "${NGINX_IP:-}" ] || [ -n "${APACHE_IP:-}" ]; then
+        IP_TO_USE="${NGINX_IP:-${APACHE_IP:-}}"
+        APP_URL_VALUE="http://${IP_TO_USE}"
+        log "✓ Configured for IP access: $APP_URL_VALUE"
+    fi
+    
     # Copy .env if not exists
     if [ ! -f ".env" ]; then
         if [ -f ".env.example" ]; then
@@ -715,7 +738,7 @@ APP_NAME="BMT Lucky Draw"
 APP_ENV=production
 APP_KEY=
 APP_DEBUG=false
-APP_URL=http://localhost
+APP_URL=${APP_URL_VALUE}
 
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
@@ -726,6 +749,9 @@ DB_PASSWORD=
 
 SESSION_DRIVER=database
 SESSION_LIFETIME=120
+SESSION_DOMAIN=
+SESSION_SECURE_COOKIE=${SESSION_SECURE_COOKIE_VALUE}
+SESSION_SAME_SITE=lax
 
 LOG_CHANNEL=stack
 LOG_LEVEL=error
@@ -733,6 +759,57 @@ EOF
         fi
     else
         log "✓ .env file already exists"
+    fi
+    
+    # Update APP_URL if .env exists
+    if [ -f ".env" ]; then
+        if grep -q "^APP_URL=" .env; then
+            # Update existing APP_URL
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|^APP_URL=.*|APP_URL=${APP_URL_VALUE}|" .env
+            else
+                sed -i "s|^APP_URL=.*|APP_URL=${APP_URL_VALUE}|" .env
+            fi
+            log "✓ Updated APP_URL to: $APP_URL_VALUE"
+        else
+            # Add APP_URL if not exists
+            echo "APP_URL=${APP_URL_VALUE}" >> .env
+            log "✓ Added APP_URL: $APP_URL_VALUE"
+        fi
+        
+        # Set SESSION_DOMAIN to empty (for compatibility with both domain and IP)
+        if grep -q "^SESSION_DOMAIN=" .env; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|^SESSION_DOMAIN=.*|SESSION_DOMAIN=|" .env
+            else
+                sed -i "s|^SESSION_DOMAIN=.*|SESSION_DOMAIN=|" .env
+            fi
+        else
+            echo "SESSION_DOMAIN=" >> .env
+        fi
+        log "✓ Set SESSION_DOMAIN empty to support both domain and IP access"
+        
+        # Set SESSION_SECURE_COOKIE
+        if grep -q "^SESSION_SECURE_COOKIE=" .env; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=${SESSION_SECURE_COOKIE_VALUE}|" .env
+            else
+                sed -i "s|^SESSION_SECURE_COOKIE=.*|SESSION_SECURE_COOKIE=${SESSION_SECURE_COOKIE_VALUE}|" .env
+            fi
+        else
+            echo "SESSION_SECURE_COOKIE=${SESSION_SECURE_COOKIE_VALUE}" >> .env
+        fi
+        log "✓ Set SESSION_SECURE_COOKIE=${SESSION_SECURE_COOKIE_VALUE}"
+        
+        # Comment out or ensure ASSET_URL is empty (use relative URLs)
+        if grep -q "^ASSET_URL=" .env; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s|^ASSET_URL=|#ASSET_URL=|" .env
+            else
+                sed -i "s|^ASSET_URL=|#ASSET_URL=|" .env
+            fi
+            log "✓ Commented ASSET_URL (will use relative URLs for compatibility)"
+        fi
     fi
     
     # Generate APP_KEY if not set
@@ -745,7 +822,7 @@ EOF
     fi
     
     log "✓ Environment file configured"
-    warn "⚠ Please edit .env file with your database credentials and settings"
+    warn "⚠ Please edit .env file with your database credentials if needed"
 }
 
 ###############################################################################
