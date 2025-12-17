@@ -860,8 +860,30 @@ configure_webserver() {
 configure_nginx() {
     log "Configuring Nginx..."
     
-    read -p "Domain name (or IP): " DOMAIN
-    DOMAIN=${DOMAIN:-localhost}
+    # Ask for domain separately
+    echo ""
+    read -p "Domain name (e.g., bmtnu.raf.my.id) [Press Enter to skip]: " DOMAIN
+    DOMAIN=${DOMAIN:-}
+    
+    # Ask for IP separately
+    echo ""
+    read -p "Server IP address (e.g., 192.168.1.100) [Press Enter to skip]: " SERVER_IP
+    SERVER_IP=${SERVER_IP:-}
+    
+    # Build server_name list (domain + IP if provided)
+    if [ -n "$DOMAIN" ] && [ -n "$SERVER_IP" ]; then
+        SERVER_NAMES="${DOMAIN} ${SERVER_IP}"
+        log "✓ Configuring for domain: $DOMAIN and IP: $SERVER_IP"
+    elif [ -n "$DOMAIN" ]; then
+        SERVER_NAMES="${DOMAIN}"
+        log "✓ Configuring for domain: $DOMAIN"
+    elif [ -n "$SERVER_IP" ]; then
+        SERVER_NAMES="${SERVER_IP}"
+        log "✓ Configuring for IP: $SERVER_IP"
+    else
+        SERVER_NAMES="_"
+        log "✓ Configuring with default server_name"
+    fi
     
     # Detect PHP version if not set
     if [ -z "${PHP_VERSION_INSTALLED:-}" ]; then
@@ -879,14 +901,20 @@ configure_nginx() {
     NGINX_CONFIG="/etc/nginx/sites-available/bmt_lucky_draw"
     
     log "Creating Nginx configuration for PHP ${PHP_VERSION_INSTALLED}..."
-    sudo tee "$NGINX_CONFIG" > /dev/null <<EOF
+    
+    # Create temporary Nginx config file
+    NGINX_CONFIG_TMP=$(mktemp)
+    cat > "$NGINX_CONFIG_TMP" <<EOF
 server {
     listen 80;
-    server_name ${DOMAIN};
+    server_name ${SERVER_NAMES};
     root ${PROJECT_DIR}/public;
 
     add_header X-Frame-Options "SAMEORIGIN";
     add_header X-Content-Type-Options "nosniff";
+
+    # Trust proxy headers (for Cloudflare Tunnel, load balancers, etc.)
+    # These are passed to PHP-FPM via fastcgi_param
 
     index index.php;
 
@@ -904,7 +932,14 @@ server {
     location ~ \.php$ {
         fastcgi_pass unix:/var/run/php/php${PHP_VERSION_INSTALLED}-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        # Pass Cloudflare/proxy headers to PHP-FPM
+        fastcgi_param HTTP_X_FORWARDED_PROTO \$http_x_forwarded_proto;
+        fastcgi_param HTTP_X_FORWARDED_FOR \$proxy_add_x_forwarded_for;
+        fastcgi_param HTTP_X_FORWARDED_HOST \$http_x_forwarded_host;
+        fastcgi_param HTTP_X_REAL_IP \$remote_addr;
         include fastcgi_params;
+        fastcgi_read_timeout 300;
     }
 
     location ~ /\.(?!well-known).* {
@@ -912,6 +947,10 @@ server {
     }
 }
 EOF
+    
+    # Copy temp file to actual config location with sudo
+    sudo cp "$NGINX_CONFIG_TMP" "$NGINX_CONFIG"
+    rm -f "$NGINX_CONFIG_TMP"
     
     # Enable site
     sudo ln -sf "$NGINX_CONFIG" /etc/nginx/sites-enabled/bmt_lucky_draw || true
@@ -929,27 +968,64 @@ EOF
         exit 1
     }
     
-    log "✓ Nginx configured for $DOMAIN"
+    if [ -n "$DOMAIN" ] && [ -n "$SERVER_IP" ]; then
+        log "✓ Nginx configured for domain: $DOMAIN and IP: $SERVER_IP"
+        export NGINX_DOMAIN="$DOMAIN"
+        export NGINX_IP="$SERVER_IP"
+    elif [ -n "$DOMAIN" ]; then
+        log "✓ Nginx configured for domain: $DOMAIN"
+        export NGINX_DOMAIN="$DOMAIN"
+    elif [ -n "$SERVER_IP" ]; then
+        log "✓ Nginx configured for IP: $SERVER_IP"
+        export NGINX_IP="$SERVER_IP"
+    else
+        log "✓ Nginx configured with default settings"
+    fi
 }
 
 configure_apache() {
     log "Configuring Apache..."
     
-    read -p "Domain name (or IP): " DOMAIN
-    DOMAIN=${DOMAIN:-localhost}
+    # Ask for domain separately
+    echo ""
+    read -p "Domain name (e.g., bmtnu.raf.my.id) [Press Enter to skip]: " DOMAIN
+    DOMAIN=${DOMAIN:-}
+    
+    # Ask for IP separately
+    echo ""
+    read -p "Server IP address (e.g., 192.168.1.100) [Press Enter to skip]: " SERVER_IP
+    SERVER_IP=${SERVER_IP:-}
+    
+    # Use domain if provided, otherwise IP, otherwise default
+    if [ -n "$DOMAIN" ]; then
+        SERVER_NAME="$DOMAIN"
+        log "✓ Configuring for domain: $DOMAIN"
+        export APACHE_DOMAIN="$DOMAIN"
+    elif [ -n "$SERVER_IP" ]; then
+        SERVER_NAME="$SERVER_IP"
+        log "✓ Configuring for IP: $SERVER_IP"
+        export APACHE_IP="$SERVER_IP"
+    else
+        SERVER_NAME="localhost"
+        log "✓ Configuring with default ServerName"
+    fi
     
     APACHE_CONFIG="/etc/apache2/sites-available/bmt_lucky_draw.conf"
     
     log "Creating Apache configuration..."
     sudo tee "$APACHE_CONFIG" > /dev/null <<EOF
 <VirtualHost *:80>
-    ServerName ${DOMAIN}
+    ServerName ${SERVER_NAME}
     DocumentRoot ${PROJECT_DIR}/public
     
     <Directory ${PROJECT_DIR}/public>
         AllowOverride All
         Require all granted
     </Directory>
+    
+    # Forward proxy headers for TrustProxies middleware
+    RequestHeader set X-Forwarded-Proto "http"
+    RequestHeader set X-Forwarded-Port "80"
     
     ErrorLog \${APACHE_LOG_DIR}/bmt_lucky_draw_error.log
     CustomLog \${APACHE_LOG_DIR}/bmt_lucky_draw_access.log combined
@@ -959,7 +1035,7 @@ EOF
     # Enable site and modules
     sudo a2ensite bmt_lucky_draw.conf || true
     sudo a2dissite 000-default.conf || true
-    sudo a2enmod rewrite || true
+    sudo a2enmod rewrite headers || true
     
     # Test configuration
     sudo apache2ctl configtest 2>&1 | tee -a "$LOG_FILE" || {
@@ -973,7 +1049,7 @@ EOF
         exit 1
     }
     
-    log "✓ Apache configured for $DOMAIN"
+    log "✓ Apache configured for $SERVER_NAME"
 }
 
 ###############################################################################
@@ -1081,17 +1157,38 @@ main() {
     log "Installation completed successfully at $(date)"
     
     echo -e "${YELLOW}Next Steps:${NC}"
-    echo "1. Edit .env file: nano $PROJECT_DIR/.env"
-    echo "2. Configure database credentials"
-    echo "3. Set APP_URL to your domain"
-    echo "4. Run: php artisan config:cache"
-    echo "5. Access your application at: http://$DOMAIN"
+    echo "1. Edit .env file if needed: nano $PROJECT_DIR/.env"
+    echo "2. Configure database credentials (if not done during installation)"
+    echo "3. Clear and rebuild caches:"
+    echo "   cd $PROJECT_DIR"
+    echo "   php artisan config:cache"
+    echo "   php artisan route:cache"
+    echo "   php artisan view:cache"
+    echo ""
+    
+    # Display access URLs
+    if [ -n "${NGINX_DOMAIN:-}" ] || [ -n "${APACHE_DOMAIN:-}" ]; then
+        DOMAIN_TO_USE="${NGINX_DOMAIN:-${APACHE_DOMAIN:-}}"
+        echo "4. Access your application:"
+        echo "   - Via Domain: http://${DOMAIN_TO_USE} (or https:// if configured)"
+        if [ -n "${NGINX_IP:-}" ] || [ -n "${APACHE_IP:-}" ]; then
+            IP_TO_USE="${NGINX_IP:-${APACHE_IP:-}}"
+            echo "   - Via IP: http://${IP_TO_USE}"
+        fi
+    elif [ -n "${NGINX_IP:-}" ] || [ -n "${APACHE_IP:-}" ]; then
+        IP_TO_USE="${NGINX_IP:-${APACHE_IP:-}}"
+        echo "4. Access your application at: http://${IP_TO_USE}"
+    else
+        echo "4. Access your application at: http://localhost"
+    fi
     echo ""
     echo -e "${YELLOW}Important:${NC}"
     echo "- Review security settings in .env"
     echo "- Run: sudo mysql_secure_installation"
-    echo "- Setup SSL certificate (recommended)"
+    echo "- Setup SSL certificate (recommended for production domains)"
     echo "- Check log file: $LOG_FILE"
+    echo "- Storage URLs are configured for relative paths (works with domain and IP)"
+    echo "- Session domain is empty for maximum compatibility"
     echo ""
 }
 
