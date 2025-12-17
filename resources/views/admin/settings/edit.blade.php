@@ -243,7 +243,7 @@
                                                 </form>
                                             </div>
                                             <div class="flex justify-center">
-                                                <img src="{{ \Storage::url($undianBackgroundImagePath) }}" alt="Background Image" class="max-h-48 max-w-full object-contain rounded-lg shadow-sm">
+                                                <img src="{{ asset('storage/' . $undianBackgroundImagePath) }}" alt="Background Image" class="max-h-48 max-w-full object-contain rounded-lg shadow-sm">
                                             </div>
                                         </div>
                                     @endif
