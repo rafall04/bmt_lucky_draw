@@ -86,7 +86,7 @@
                                         </form>
                                     </div>
                                     <div class="flex justify-center">
-                                        <img src="{{ \Storage::url($logoPath) }}" alt="Logo BMT NU" class="max-h-32 max-w-full object-contain rounded-lg shadow-sm">
+                                        <img src="{{ asset('storage/' . $logoPath) }}" alt="Logo BMT NU" class="max-h-32 max-w-full object-contain rounded-lg shadow-sm">
                                     </div>
                                 </div>
                             @endif
@@ -124,7 +124,7 @@
                                         </form>
                                     </div>
                                     <div class="flex justify-center">
-                                        <img src="{{ \Storage::url($doorprizeImagePath) }}" alt="Foto Doorprize" class="max-h-64 max-w-full object-contain rounded-lg shadow-sm">
+                                        <img src="{{ asset('storage/' . $doorprizeImagePath) }}" alt="Foto Doorprize" class="max-h-64 max-w-full object-contain rounded-lg shadow-sm">
                                     </div>
                                 </div>
                             @endif

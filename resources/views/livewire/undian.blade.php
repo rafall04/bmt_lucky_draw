@@ -3,7 +3,7 @@
     $bgStyle = '';
     $hasBackgroundImage = false;
     if ($undianBackgroundType === 'image' && $undianBackgroundImagePath && \Storage::disk('public')->exists($undianBackgroundImagePath)) {
-        $bgStyle = 'background-image: url(' . \Storage::url($undianBackgroundImagePath) . '); background-size: cover; background-position: center; background-repeat: no-repeat;';
+        $bgStyle = 'background-image: url(' . asset('storage/' . $undianBackgroundImagePath) . '); background-size: cover; background-position: center; background-repeat: no-repeat;';
         $hasBackgroundImage = true;
     } elseif ($undianBackgroundType === 'color') {
         // Check if gradient colors are set
@@ -42,7 +42,7 @@
         <div class="flex items-center space-x-3 lg:space-x-4">
             <div class="bg-white rounded-full p-2 lg:p-3 shadow-lg flex-shrink-0">
                 @if($logoPath && \Storage::disk('public')->exists($logoPath))
-                    <img src="{{ \Storage::url($logoPath) }}" 
+                    <img src="{{ asset('storage/' . $logoPath) }}" 
                          alt="Logo BMT NU" 
                          class="w-12 h-12 lg:w-16 lg:h-16 object-contain rounded-full">
                 @else
@@ -143,7 +143,7 @@
                 @if($doorprizeImagePath && \Storage::disk('public')->exists($doorprizeImagePath))
                     <!-- Display Uploaded Doorprize Image -->
                     <div class="flex justify-center items-center w-full h-full p-4 lg:p-6">
-                        <img src="{{ \Storage::url($doorprizeImagePath) }}" 
+                        <img src="{{ asset('storage/' . $doorprizeImagePath) }}" 
                              alt="Foto Doorprize" 
                              class="max-h-full max-w-full w-auto h-auto object-contain rounded-lg shadow-2xl">
                     </div>

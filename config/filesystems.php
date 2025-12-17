@@ -11,7 +11,9 @@ return [
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),
-            'url' => env('APP_URL').'/storage',
+            // Use null to generate relative URLs, or dynamic URL based on request
+            // This ensures Storage::url() works with both domain and IP access
+            'url' => env('ASSET_URL') ?: null,
             'visibility' => 'public',
             'throw' => false,
         ],
